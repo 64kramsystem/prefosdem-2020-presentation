@@ -8,9 +8,13 @@ See INTERESTING notes and TODO/STUDY.
 
 TODO: introduction
 
+TODO: how to introduce `--innodb-optimize-keys`?
+
+TODO: read https://www.cfpland.com/guides/speaking
+
 Contents (/WIP_fosdem_mysql_8_upgrade#):
 
-## Minimal MySQL configuration
+## (Minimal) MySQL configuration
 
 ```
 [mysqld]
@@ -32,7 +36,9 @@ user = root
 auto-rehash = FALSE
 ```
 
-## Curiosity: innodb_data_file_path
+## Differences
+
+### Curiosity: innodb_data_file_path
 
 It seems that in MySQL 8.0, the system tablespace can be placed anywhere.
 
@@ -59,7 +65,7 @@ INTERESTING:
 
 - logs and innodb system tablespace (doublewrite buffer) in an NVRAM drive (or anyway, for development)
 
-## General upgrade advice: always compare the status variables
+### General upgrade advice: always compare the status variables
 
 - Use a very vanilla version of `~/.my.cnf`.
 
@@ -96,6 +102,7 @@ INTERESTING:
 
 - SHOW ... WHERE
 - RLIKE! (example with character set and collation)
+- new: `information_schema_stats_expiry`
 - MySQL 8.0 Invisible indexes (STUDY)
 - Skip scan range optimization (STUDY: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html)
   - Loose index scan (STUDY: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html)
@@ -108,3 +115,28 @@ INTERESTING:
 - innodb_max_dirty_pages_pct (NO)
 
 - STUDY: MySQL LRU (https://dev.mysql.com/doc/refman/5.5/en/innodb-buffer-pool.html)
+
+### GROUP BY not ordered by default anymore
+
+INTERESTING: using grep with regular expressions
+
+### utf8mb4
+
+STUDY: review article
+
+#### utf8mb4: different collation
+
+- TODO: test on mac -> client with utf8 compiled (collation can't be specified)
+- STUDY (review article) trailing space due to new collation
+
+#### utf8mb4: columns/indexes now have less chars available
+
+- TODO: convenience of moving to BLOBs
+
+### Stats are now cached (`information_schema_stats_expiry`)
+
+### Gh-ost currently doesn't work!
+
+## Shortcomings in MySQL 8
+
+### mysqldump not accepting patterns/mysqlpump broken
