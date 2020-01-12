@@ -4,36 +4,18 @@ title: WIP FOSDEM MySQL 8 Upgrade
 tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 ---
 
-See INTERESTING notes and TODO/STUDY.
+[TOC]
+
+Labels:
+
+- `WRITE`:             section to write
+- `TODO`:               generic thing to do
+- `STUDY`:             subject to study
+- `INTERESTING`: subject to bring up
 
 TODO: introduction
 
-TODO: how to introduce `--innodb-optimize-keys`?
-
 TODO: read https://www.cfpland.com/guides/speaking
-
-Contents (/WIP_fosdem_mysql_8_upgrade#):
-
-## Previous notes
-
-- encoding
-  - simulate the old configuration
-    ```
-    [mysqld]
-    character_set_server=latin1
-    collation_server=latin1_swedish_ci
-    ```
-- GROUP BY not ordered by default anymore
-- utf8mb4: columns/indexes now have less chars available
-- utf8mb4: different collation
-  - client with utf8 compiled (collation can't be specified)
-  - trailing space due to new collation
-- load buffer pct
-- issue with joins not using indexes with few non-null values
-- stats are now cached (`information_schema_stats_expiry`)
-- gh-ost currently doesn't work!
-- innodb system tablespace can be on separate directory!
-- (Write article about FT index problems on mysql)
 
 ## (Minimal) MySQL configuration
 
@@ -92,7 +74,7 @@ INTERESTING:
 
 ```sh
 
-# make sure cnf is minimatl
+# make sure cnf is minimal
 
 cd ~/local
 
@@ -116,7 +98,6 @@ mysql -te 'SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch
 
 meld ~/Desktop/mysql*longs*
 meld ~/Desktop/mysql*shorts*
-
 ```
 
 INTERESTING:
@@ -145,19 +126,50 @@ INTERESTING: using grep with regular expressions
 
 STUDY: review article
 
-#### utf8mb4: different collation
+#### different collation
 
-- TODO: test on mac -> client with utf8 compiled (collation can't be specified)
-- STUDY (review article) trailing space due to new collation
+WRITE
+ - TODO: test on mac -> client with utf8 compiled (collation can't be specified)
+ - STUDY (review article) trailing space due to new collation
 
-#### utf8mb4: columns/indexes now have less chars available
+v5.7 charset/collation defaults:
+```
+character_set_server=latin1
+collation_server=latin1_swedish_ci
+```
 
-- TODO: convenience of moving to BLOBs
+#### columns/indexes now have less chars available
+
+WRITE: convenience of moving to BLOBs
+
+### Memtable engine
+
+WRITE
+  - can use BLOBs! also check other changes
+  - varchars are not extended anymore? (check)
 
 ### Stats are now cached (`information_schema_stats_expiry`)
 
+WRITE
+  - test for live presentation
+
 ### Gh-ost currently doesn't work!
+
+WRITE
 
 ## Shortcomings in MySQL 8
 
+WRITE
+
 ### mysqldump not accepting patterns/mysqlpump broken
+
+WRITE
+ - note `--innodb-optimize-keys`?
+
+### FT index administration problems on mysql
+
+WRITE
+
+### Issue with joins not using indexes with few non-null values
+
+MAYBE
