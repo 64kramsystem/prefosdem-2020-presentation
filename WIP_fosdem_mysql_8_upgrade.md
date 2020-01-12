@@ -14,6 +14,27 @@ TODO: read https://www.cfpland.com/guides/speaking
 
 Contents (/WIP_fosdem_mysql_8_upgrade#):
 
+## Previous notes
+
+- encoding
+  - simulate the old configuration
+    ```
+    [mysqld]
+    character_set_server=latin1
+    collation_server=latin1_swedish_ci
+    ```
+- GROUP BY not ordered by default anymore
+- utf8mb4: columns/indexes now have less chars available
+- utf8mb4: different collation
+  - client with utf8 compiled (collation can't be specified)
+  - trailing space due to new collation
+- load buffer pct
+- issue with joins not using indexes with few non-null values
+- stats are now cached (`information_schema_stats_expiry`)
+- gh-ost currently doesn't work!
+- innodb system tablespace can be on separate directory!
+- (Write article about FT index problems on mysql)
+
 ## (Minimal) MySQL configuration
 
 ```
