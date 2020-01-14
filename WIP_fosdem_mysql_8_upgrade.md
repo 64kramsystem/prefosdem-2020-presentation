@@ -6,37 +6,56 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 
 [TOC]
 
-Labels:
+## Presentation Legenda/General dos/Personal notes
 
-- `WRITE`:             section to write
-- `TODO`:               generic thing to do
-- `STUDY`:             subject to study
-- `EXPLAIN`:         subject to bring up
-- `OPTIONAL`:      subject to potentially bring up
+| Label | Explanation |
+| ---- | ---- |
+| `WRITE` | section to write (or generic thing to do) |
+| `STUDY` | subject to study |
+| `EXPLAIN` | subject to bring up |
+| `OPTIONAL` | subject to potentially bring up |
 
-TODO: introduction
+- WRITEME: plan how to remember things to do without being in the slides, and how to know what's OPTIONAL for a given subject
+- OPTIONAL/STUDY: [MySQL LRU](https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html)
 
-TODO: read https://www.cfpland.com/guides/speaking
+- Change buffer: buffer for secondary index changes, which can potentially be merged at a later time
+- Undo tablespaces (logs): information about how to rollback changes made by a transaction
+  - self-standing in mysql 8.0
+- Data dictionary: in mysql 8.0, stored in the MySQL data dictionary
 
-## (Minimal) MySQL configuration
+## Introduction
+
+WRITE: introduction
+
+## Preset MySQL configuration, and general tooling introduction
 
 ```sh
+# Configuration
+
 cat > ~/.my.cnf << CONF
 [mysqld]
 
-tmpdir                    = /home/saverio/databases/mysql_temp
 datadir                   = /home/saverio/databases/mysql_data
 innodb_log_group_home_dir = /dev/shm/mysql_logs
 
 # For compatibility with MySQL 5.7
-lc_messages_dir          = /home/saverio/local/mysql/share
-character_set_server     = utf8mb4
+lc_messages_dir           = /home/saverio/local/mysql/share
+character_set_server      = utf8mb4
 
 [client]
 
 user = root
+
+[mysql]
+
+database = temp
 CONF
+
+which mystart
+which mystop
 ```
+
+EXPLAIN: automatic database
 
 ## Differences
 
@@ -58,16 +77,14 @@ innodb_log_group_home_dir = /dev/shm/mysql_logs
 innodb_data_file_path     = /dev/shm/mysql_logs/ibdata1:12M:autoextend
 ```
 
-EXPLAIN!
-- explain how to turbocharge MySQL write capacity using an NVRAM device, or /dev/shm (tmpfs) in dev environments,
+- OPTIONAL: how to turbocharge MySQL write capacity using an NVRAM device, or /dev/shm (tmpfs) in dev environments
+- OPTIONAL: debate about doublewrite (STUDY: read sources)
 
-### General upgrade advice: always compare the status variables
+### First step before upgrading: output and compare the global system variables
 
 EXPLAIN: general idea: get a nice, ordered table
 
 ```sh
-mystop # for safety
-
 cd ~/local
 
 ln -sfn mysql-5* mysql # then show
@@ -96,53 +113,131 @@ meld ~/Desktop/*longs*
 meld ~/Desktop/*shorts*
 ```
 
-EXPLAIN: `information_schema_stats_expiry`
-EXPLAIN: `innodb_flush_neighbors`
-EXPLAIN: Query caching gone (STUDY: https://mysqlserverteam.com/mysql-8-0-retiring-support-for-the-query-cache)
-OPTIONAL: Skip scan range optimization (STUDY: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html)
-  - Loose index scan (STUDY: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html)
-  - MySQL B-trees implementation (STUDY)
-OPTIONAL: hash joins instead of block nested loop (STUDY)
-OPTIONAL:  invisible indexes (study)
-- innodb_max_dirty_pages_pct (STUDY/MAYBE)
-- innodb_parallel_read_threads (OPTIONAL)
-- innodb_max_dirty_pages_pct (NO)
+### SQL mode: `NO_AUTO_CREATE_USER`
 
-- STUDY: MySQL LRU (https://dev.mysql.com/doc/refman/5.5/en/innodb-buffer-pool.html)
+This used to work on MySQL 5.7:
+
+```sql
+SELECT * FROM mysql.user WHERE User = 'saverio';
+# none
+
+GRANT ALL ON *.* TO saverio@'%';
+# success
+```
+
+It fails on MySQL 8.0:
+
+```sql
+SELECT * FROM mysql.user WHERE User = 'saverio';
+# none
+
+GRANT ALL ON *.* TO saverio@'%';
+ERROR 1410 (42000): You are not allowed to create a user with GRANT
+```
+
+It needs to be manually created:
+
+```sql
+CREATE USER saverio@'%' IDENTIFIED BY 'pwd';
+# success
+
+GRANT ALL ON *.* TO saverio@'%';
+# success
+```
+
+### Optimizer switches: `use_invisible_indexes=off`
+
+- STUDY/WRITE: invisible indexes
+
+### Optimizer switches: `skip_scan=on`
+
+- STUDY/WRITE: Skip scan range optimization (STUDY: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html)
+
+- OPTIONAL/STUDY: Loose index scan (STUDY: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html)
+- OPTIONAL/STUDY: MySQL B-trees implementation
+
+### Optimizer switches: `hash_join=on`
+
+- STUDY/WRITE: hash joins instead of block nested loop
+
+### `information_schema_stats_expiry`
+
+[Reference](https://dev.mysql.com/doc/refman/8.0/en/statistics-table.html)
+
+```sql
+CREATE TABLE mytable (id INT AUTO_INCREMENT PRIMARY KEY);
+
+SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'mytable';
+# +------------+----------------+
+# | TABLE_NAME | AUTO_INCREMENT |
+# +------------+----------------+
+# | mytable    |           NULL |
+# +------------+----------------+
+
+INSERT INTO mytable VALUES (1);
+
+SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'mytable';
+# +------------+----------------+
+# | TABLE_NAME | AUTO_INCREMENT |
+# +------------+----------------+
+# | mytable    |           NULL |
+# +------------+----------------+
+
+ANALYZE TABLE mytable;
+
+SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'mytable';
+# +------------+----------------+
+# | TABLE_NAME | AUTO_INCREMENT |
+# +------------+----------------+
+# | mytable    |              2 |
+# +------------+----------------+
+
+DROP TABLE mytable;
+```
+
+### `innodb_flush_neighbors`
+
+> When the table data is stored on a traditional HDD storage device, flushing such neighbor pages in one operation reduces I/O overhead (primarily for disk seek operations) compared to flushing individual pages at different times
+> [...] buffer pool flushing is performed by page cleaner threads
+
+### `innodb_max_dirty_pages_pct_lwm`, `innodb_max_dirty_pages_pct`
+
+> Buffer pool flushing is initiated when the percentage of dirty pages reaches the low water mark value defined by the `innodb_max_dirty_pages_pct_lwm` variable. The default low water mark is 10% of buffer pool pages.
+> The purpose of the `innodb_max_dirty_pages_pct_lwm` threshold is to control the percentage dirty pages in the buffer pool, and to prevent the amount of dirty pages from reaching the threshold defined by the `innodb_max_dirty_pages_pct` variable, which has a default value of 90. InnoDB aggressively flushes buffer pool pages if the percentage of dirty pages in the buffer pool reaches the innodb_max_dirty_pages_pct threshold.
+
+Previous values: respectively, 10 and 75.
+
+### `innodb_stats_sample_pages`
+
+Split into `innodb_stats_persistent_sample_pages` and `innodb_stats_transient_sample_pages` (depending on`innodb_stats_persistent`).
+
+### Query caching is gone!
+
+STUDY: https://mysqlserverteam.com/mysql-8-0-retiring-support-for-the-query-cache
 
 ### GROUP BY not ordered by default anymore
 
-EXPLAIN: using grep with regular expressions
+WRITE: using grep with regular expressions
 
 ### utf8mb4
 
-STUDY: review article
+STUDY/WRITE: review article
 
-#### different collation
+#### Different collation
 
-WRITE
- - TODO: test on mac -> client with utf8 compiled (collation can't be specified)
- - STUDY (review article) trailing space due to new collation
+STUDY/WRITE: test on mac -> client with utf8 compiled (collation can't be specified)
+STUDY/WRITE: (review article) trailing space due to new collation
 
-v5.7 charset/collation defaults:
-```
-character_set_server=latin1
-collation_server=latin1_swedish_ci
-```
+#### Columns/indexes now have less chars available
 
-#### columns/indexes now have less chars available
+STUDY/WRITE: find query for at-risk indexes
 
-TODO: find query for at-risk indexes
+- OPTIONAL/STUDY/WRITE (3 articles): general considerations about VARCHARs/BLOBs
+  - https://dev.mysql.com/doc/refman/8.0/en/char.html
+  - [Live view char values storage fragmentation](https://dba.stackexchange.com/a/210430)
+  - https://mysqlserverteam.com/externally-stored-fields-in-innodb
 
-OPTIONAL: general considerations about VARCHARs/BLOBs
-- STUDY: https://dev.mysql.com/doc/refman/8.0/en/char.html
 > InnoDB encodes fixed-length fields greater than or equal to 768 bytes in length as variable-length fields, which can be stored off-page
-
-- STUDY: https://dba.stackexchange.com/a/210430
-
-- STUDY: https://mysqlserverteam.com/externally-stored-fields-in-innodb/
-
-
 
 ### TempTable engine
 
@@ -165,19 +260,9 @@ WRITE
 ### mysqldump not accepting patterns/mysqlpump broken
 
 WRITE
- - note `--innodb-optimize-keys`?
+
+EXPLAIN: `--innodb-optimize-keys`
 
 ### FT index administration problems on mysql
 
 WRITE
-
-### Issue with joins not using indexes with few non-null values
-
-MAYBE
-
-## Personal notes
-
-- change buffer: buffer for secondary index changes, which can potentially be merged at a later time
-- undo tablespaces (logs): information about how to rollback changes made by a transaction
-  - self-standing in mysql 8.0
-- data dictionary: in mysql 8.0, stored in the MySQL data dictionary
