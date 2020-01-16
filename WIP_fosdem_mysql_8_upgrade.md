@@ -11,11 +11,10 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 | Label | Explanation |
 | ---- | ---- |
 | `WRITE` | section to write (or generic thing to do) |
-| `STUDY` | subject to study |
+| `STUDY` | subject to study and write|
 | `EXPLAIN` | subject to bring up |
 | `OPTIONAL` | subject to potentially bring up |
 
-- WRITEME: plan how to remember things to do without being in the slides, and how to know what's OPTIONAL for a given subject
 - OPTIONAL/STUDY: [MySQL LRU](https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html)
 
 - Change buffer: buffer for secondary index changes, which can potentially be merged at a later time
@@ -78,7 +77,7 @@ innodb_data_file_path     = /dev/shm/mysql_logs/ibdata1:12M:autoextend
 ```
 
 - OPTIONAL: how to turbocharge MySQL write capacity using an NVRAM device, or /dev/shm (tmpfs) in dev environments
-- OPTIONAL: debate about doublewrite (STUDY: read sources)
+- OPTIONAL/STUDY: debate about doublewrite (read sources)
 
 ### First step before upgrading: output and compare the global system variables
 
@@ -147,18 +146,18 @@ GRANT ALL ON *.* TO saverio@'%';
 
 ### Optimizer switches: `use_invisible_indexes=off`
 
-- STUDY/WRITE: invisible indexes
+- OPTIONAL/STUDY: invisible indexes
 
 ### Optimizer switches: `skip_scan=on`
 
-- STUDY/WRITE: Skip scan range optimization (STUDY: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html)
+- STUDY: Skip scan range optimization (STUDY: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html)
 
 - OPTIONAL/STUDY: Loose index scan (STUDY: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html)
 - OPTIONAL/STUDY: MySQL B-trees implementation
 
 ### Optimizer switches: `hash_join=on`
 
-- STUDY/WRITE: hash joins instead of block nested loop
+- STUDY: hash joins instead of block nested loop
 
 ### `information_schema_stats_expiry`
 
@@ -217,22 +216,67 @@ STUDY: https://mysqlserverteam.com/mysql-8-0-retiring-support-for-the-query-cach
 
 ### GROUP BY not ordered by default anymore
 
-WRITE: using grep with regular expressions
+```sh
+cat > /tmp/test1 << SQL
+  GROUP BY col1
+  ends here
+
+  GROUP BY col2
+  ORDER BY col2
+
+  GROUP BY col3
+  ends here
+
+  GROUP BY col4
+SQL
+
+cat > /tmp/test2 << SQL
+  GROUP BY col5
+  ORDER BY col5
+SQL
+
+# Basic version: manually inspect with grep.
+#
+grep -A 1 'GROUP BY' /tmp/test*
+
+# Perl, with some simple logic (previous/current)
+#
+# Make Perl speak english :-) Capital `M`, don't forget.
+#
+perl -MEnglish -ne 'print "$ARGV: $previous $ARG" if $previous =~ /GROUP BY/ && !/ORDER BY/; $previous = $ARG' /tmp/test*
+
+# Make Perl print the filenames, and send them so an editor.
+#
+# Watch out the newline!
+#
+# Notes:
+# - `-l` adds the newline automatically
+# - we're ignoring filenames duplication
+#
+perl -MEnglish -ne 'print "$ARGV\n" if $previous =~ /GROUP BY/ && !/ORDER BY/; $previous = $ARG' /tmp/test* | xargs subl
+
+# OPTIONAL: Yikes! Negative regex.
+#
+# See https://stackoverflow.com/a/406408.
+# Note that this works because by default, dots don't match newlines.
+#
+grep -zP 'GROUP BY .+\n((?!ORDER BY ).)*\n' /tmp/test*
+```
 
 ### utf8mb4
 
-STUDY/WRITE: review article
+STUDY: review article
 
 #### Different collation
 
-STUDY/WRITE: test on mac -> client with utf8 compiled (collation can't be specified)
-STUDY/WRITE: (review article) trailing space due to new collation
+STUDY: test on mac -> client with utf8 compiled (collation can't be specified)
+STUDY: (review article) trailing space due to new collation
 
 #### Columns/indexes now have less chars available
 
-STUDY/WRITE: find query for at-risk indexes
+STUDY: find query for at-risk indexes
 
-- OPTIONAL/STUDY/WRITE (3 articles): general considerations about VARCHARs/BLOBs
+- OPTIONAL/STUDY (3 articles): general considerations about VARCHARs/BLOBs
   - https://dev.mysql.com/doc/refman/8.0/en/char.html
   - [Live view char values storage fragmentation](https://dba.stackexchange.com/a/210430)
   - https://mysqlserverteam.com/externally-stored-fields-in-innodb
@@ -255,14 +299,12 @@ Use `pt-online-schema-change` (v3.1.0 is broken!)
 
 ## Shortcomings in MySQL 8
 
-WRITE
-
 ### mysqldump not accepting patterns/mysqlpump broken
 
-WRITE
+OPTIONAL/WRITE: mysqldump not accepting patterns/mysqlpump broken
 
 EXPLAIN: `--innodb-optimize-keys`
 
 ### FT index administration problems on mysql
 
-WRITE
+OPTIONAL/STUDY: FT index administration problems on mysql
