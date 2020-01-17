@@ -4,7 +4,30 @@ title: WIP FOSDEM MySQL 8 Upgrade
 tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 ---
 
-[TOC]
+- [Presentation Legenda/General dos/Personal notes](#presentation-legendageneral-dospersonal-notes)
+- [Introduction](#introduction)
+- [Preset MySQL configuration, and general tooling introduction](#preset-mysql-configuration-and-general-tooling-introduction)
+- [Differences](#differences)
+  - [Curiosity: innodb_data_file_path](#curiosity-innodbdatafilepath)
+  - [First step before upgrading: output and compare the global system variables](#first-step-before-upgrading-output-and-compare-the-global-system-variables)
+  - [SQL mode: `NO_AUTO_CREATE_USER`](#sql-mode-noautocreateuser)
+  - [Optimizer switches: `use_invisible_indexes=off`](#optimizer-switches-useinvisibleindexesoff)
+  - [Optimizer switches: `skip_scan=on` (Skip scan range optimization)](#optimizer-switches-skipscanon-skip-scan-range-optimization)
+  - [Optimizer switches: `hash_join=on`](#optimizer-switches-hashjoinon)
+  - [`information_schema_stats_expiry`](#informationschemastatsexpiry)
+  - [`innodb_flush_neighbors`](#innodbflushneighbors)
+  - [`innodb_max_dirty_pages_pct_lwm`, `innodb_max_dirty_pages_pct`](#innodbmaxdirtypagespctlwm-innodbmaxdirtypagespct)
+  - [`innodb_stats_sample_pages`](#innodbstatssamplepages)
+  - [Query caching is gone!](#query-caching-is-gone)
+  - [GROUP BY not ordered by default anymore](#group-by-not-ordered-by-default-anymore)
+  - [utf8mb4](#utf8mb4)
+    - [Different collation](#different-collation)
+    - [Columns/indexes now have less chars available](#columnsindexes-now-have-less-chars-available)
+  - [TempTable engine](#temptable-engine)
+  - [Gh-ost currently doesn't work!](#gh-ost-currently-doesnt-work)
+- [Shortcomings in MySQL 8](#shortcomings-in-mysql-8)
+  - [mysqldump not accepting patterns/mysqlpump broken](#mysqldump-not-accepting-patternsmysqlpump-broken)
+  - [FT index administration problems on mysql](#ft-index-administration-problems-on-mysql)
 
 ## Presentation Legenda/General dos/Personal notes
 
@@ -15,6 +38,7 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 | `EXPLAIN` | subject to bring up |
 | `OPTIONAL` | subject to potentially bring up |
 
+- WRITE: `myswitch`
 - OPTIONAL/STUDY: [MySQL LRU](https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html)
 
 - Change buffer: buffer for secondary index changes, which can potentially be merged at a later time
@@ -75,6 +99,8 @@ datadir                   = /home/saverio/databases/mysql_data
 innodb_log_group_home_dir = /dev/shm/mysql_logs
 innodb_data_file_path     = /dev/shm/mysql_logs/ibdata1:12M:autoextend
 ```
+
+Filed bug about documentation!
 
 - OPTIONAL: how to turbocharge MySQL write capacity using an NVRAM device, or /dev/shm (tmpfs) in dev environments
 - OPTIONAL/STUDY: debate about doublewrite (read sources)
@@ -148,12 +174,36 @@ GRANT ALL ON *.* TO saverio@'%';
 
 - OPTIONAL/STUDY: invisible indexes
 
-### Optimizer switches: `skip_scan=on`
+### Optimizer switches: `skip_scan=on` (Skip scan range optimization)
 
-- STUDY: Skip scan range optimization (STUDY: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html)
+Source: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html.
 
-- OPTIONAL/STUDY: Loose index scan (STUDY: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html)
-- OPTIONAL/STUDY: MySQL B-trees implementation
+- for each distinct f1 value, perform a subrange scan (f1, {f2_condition})
+
+Data:
+
+```sql
+CREATE TABLE t1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
+
+INSERT INTO t1 VALUES (1,1), (1,2), (1,3), (1,4), (1,5), (2,1), (2,2), (2,3), (2,4), (2,5);
+INSERT INTO t1 SELECT f1, f2 + 5 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 10 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 20 FROM t1;
+INSERT INTO t1 SELECT f1, f2 + 40 FROM t1;
+
+ANALYZE TABLE t1;
+```
+
+Comparison!:
+
+```sh
+meld <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(t1) */ f1, f2 FROM t1 WHERE f2 > 40\G") \
+     <(mysql -e "EXPLAIN FORMAT=JSON SELECT                         f1, f2 FROM t1 WHERE f2 > 40\G")
+```
+
+Filed bug about TEMPORARY tables!
+
+- STUDY: MySQL B-trees implementation
 
 ### Optimizer switches: `hash_join=on`
 
