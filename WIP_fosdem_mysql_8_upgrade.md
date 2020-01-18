@@ -13,6 +13,7 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
   - [SQL mode: `NO_AUTO_CREATE_USER`](#sql-mode-noautocreateuser)
   - [Optimizer switches: `use_invisible_indexes=off`](#optimizer-switches-useinvisibleindexesoff)
   - [Optimizer switches: `skip_scan=on` (Skip scan range optimization)](#optimizer-switches-skipscanon-skip-scan-range-optimization)
+    - [Loose index scan (OPTIONAL)](#loose-index-scan-optional)
   - [Optimizer switches: `hash_join=on`](#optimizer-switches-hashjoinon)
   - [`information_schema_stats_expiry`](#informationschemastatsexpiry)
   - [`innodb_flush_neighbors`](#innodbflushneighbors)
@@ -38,7 +39,6 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 | `EXPLAIN` | subject to bring up |
 | `OPTIONAL` | subject to potentially bring up |
 
-- WRITE: `myswitch`
 - OPTIONAL/STUDY: [MySQL LRU](https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html)
 
 - Change buffer: buffer for secondary index changes, which can potentially be merged at a later time
@@ -203,7 +203,9 @@ meld <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(t1) */ f1, f2 FROM 
 
 Filed bug about TEMPORARY tables!
 
-- STUDY: MySQL B-trees implementation
+#### Loose index scan (OPTIONAL)
+
+- OPTIONAL/WRITE: Loose index scan (https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html): copy base data
 
 ### Optimizer switches: `hash_join=on`
 
