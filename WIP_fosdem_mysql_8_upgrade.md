@@ -55,30 +55,14 @@ WRITE: introduction
 ```sh
 # Configuration
 
-cat > ~/.my.cnf << CONF
-[mysqld]
-
-datadir                   = /home/saverio/databases/mysql_data
-innodb_log_group_home_dir = /dev/shm/mysql_logs
-
-# For compatibility with MySQL 5.7
-lc_messages_dir           = /home/saverio/local/mysql/share
-character_set_server      = utf8mb4
-
-[client]
-
-user = root
-
-[mysql]
-
-database = temp
-CONF
+cat files/WIP_fosdem_mysql_8_upgrade.cnf
 
 which mystart
 which mystop
-```
 
-EXPLAIN: automatic database
+# Make sure to start with the specific config file!
+# Alias `mysql` to `mysql -D temp`!
+```
 
 ## Differences
 
@@ -114,7 +98,7 @@ cd ~/local
 
 ln -sfn mysql-5* mysql # then show
 
-mystart
+mystart files/WIP_fosdem_mysql_8_upgrade.cnf
 
 # EXPLAIN: why `-t`
 # EXPLAIN: long ones - we need to filter
@@ -129,7 +113,7 @@ mystop
 
 ln -sfn mysql-8* mysql
 
-mystart
+mystart files/WIP_fosdem_mysql_8_upgrade.cnf
 
 mysql -te 'SHOW GLOBAL VARIABLES WHERE Variable_name     RLIKE "optimizer_switch|sql_mode"' > ~/Desktop/config.longs.5.7.txt
 mysql -te 'SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch|sql_mode"' > ~/Desktop/config.shorts.5.7.txt
@@ -183,23 +167,26 @@ Source: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html.
 Data:
 
 ```sql
-CREATE TABLE t1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
+CREATE TABLE ss1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
 
-INSERT INTO t1 VALUES (1,1), (1,2), (1,3), (1,4), (1,5), (2,1), (2,2), (2,3), (2,4), (2,5);
-INSERT INTO t1 SELECT f1, f2 + 5 FROM t1;
-INSERT INTO t1 SELECT f1, f2 + 10 FROM t1;
-INSERT INTO t1 SELECT f1, f2 + 20 FROM t1;
-INSERT INTO t1 SELECT f1, f2 + 40 FROM t1;
+INSERT INTO ss1 VALUES (1,1), (1,2), (1,3), (1,4), (1,5), (2,1), (2,2), (2,3), (2,4), (2,5);
+INSERT INTO ss1 SELECT f1, f2 + 5 FROM ss1;
+INSERT INTO ss1 SELECT f1, f2 + 10 FROM ss1;
+INSERT INTO ss1 SELECT f1, f2 + 20 FROM ss1;
+INSERT INTO ss1 SELECT f1, f2 + 40 FROM ss1;
 
-ANALYZE TABLE t1;
+ANALYZE TABLE ss1;
 ```
 
 Comparison!:
 
 ```sh
-meld <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(t1) */ f1, f2 FROM t1 WHERE f2 > 40\G") \
-     <(mysql -e "EXPLAIN FORMAT=JSON SELECT                         f1, f2 FROM t1 WHERE f2 > 40\G")
+meld \
+  <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(ss1) */ f1, f2 FROM ss1 WHERE f2 > 40\G") \
+  <(mysql -e "EXPLAIN FORMAT=JSON SELECT                          f1, f2 FROM ss1 WHERE f2 > 40\G")
 ```
+
+STUDY: review b+trees again (also, see http://mlwiki.org/index.php/B-Tree#Range_Lookups)
 
 Filed bug about TEMPORARY tables!
 
@@ -210,6 +197,21 @@ Filed bug about TEMPORARY tables!
 ### Optimizer switches: `hash_join=on`
 
 - STUDY: hash joins instead of block nested loop
+
+```sql
+CREATE TABLE hj1 (c1 INT, c2 INT);
+CREATE TABLE hj2 (c1 INT, c2 INT);
+
+INSERT INTO hj1 VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+INSERT INTO hj2 SELECT * FROM hj1;
+
+-- Only shows in JSON format (!)
+EXPLAIN FORMAT=JSON SELECT * FROM hj1 JOIN hj2 USING (c1)\G
+```
+
+Filed bug about other EXPLAIN formats not showing the correct strategy.
+
+STUDY/WRITE: Hash join <> Block nested loop algo (https://dev.mysql.com/worklog/task/?id=2241)
 
 ### `information_schema_stats_expiry`
 
