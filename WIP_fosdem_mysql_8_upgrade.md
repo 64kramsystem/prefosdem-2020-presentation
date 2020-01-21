@@ -20,7 +20,7 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
   - [`innodb_max_dirty_pages_pct_lwm`, `innodb_max_dirty_pages_pct`](#innodbmaxdirtypagespctlwm-innodbmaxdirtypagespct)
   - [`innodb_stats_sample_pages`](#innodbstatssamplepages)
   - [Query caching is gone!](#query-caching-is-gone)
-  - [GROUP BY not ordered by default anymore](#group-by-not-ordered-by-default-anymore)
+  - [GROUP BY not implicitly sorted anymore](#group-by-not-implicitly-sorted-anymore)
   - [utf8mb4](#utf8mb4)
     - [Different collation](#different-collation)
     - [Columns/indexes now have less chars available](#columnsindexes-now-have-less-chars-available)
@@ -38,6 +38,8 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 | `STUDY` | subject to study and write|
 | `EXPLAIN` | subject to bring up |
 | `OPTIONAL` | subject to potentially bring up |
+
+- WRITE: write myswitch(), which also automatically uses the database
 
 - OPTIONAL/STUDY: [MySQL LRU](https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html)
 
@@ -186,9 +188,13 @@ meld \
   <(mysql -e "EXPLAIN FORMAT=JSON SELECT                          f1, f2 FROM ss1 WHERE f2 > 40\G")
 ```
 
-STUDY: review b+trees again (also, see http://mlwiki.org/index.php/B-Tree#Range_Lookups)
+B+trees references:
+- https://use-the-index-luke.com/sql/anatomy/slow-indexes
+- http://mlwiki.org/index.php/B-Tree#Range_Lookups
 
-Filed bug about TEMPORARY tables!
+(Some) index access types:
+- Index unique scan: a single traverse
+- Range scan: Index unique scan + leaves traversal
 
 #### Loose index scan (OPTIONAL)
 
@@ -196,22 +202,36 @@ Filed bug about TEMPORARY tables!
 
 ### Optimizer switches: `hash_join=on`
 
-- STUDY: hash joins instead of block nested loop
+Sources:
+
+- https://dev.mysql.com/worklog/task/?id=2241#tabs-2241-4
+- https://www.percona.com/blog/2019/10/30/understanding-hash-joins-in-mysql-8
 
 ```sql
-CREATE TABLE hj1 (c1 INT, c2 INT);
-CREATE TABLE hj2 (c1 INT, c2 INT);
+CREATE TABLE hj1 (c1 INT);
 
-INSERT INTO hj1 VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+INSERT INTO hj1 VALUES (1), (2), (3), (4);
+INSERT INTO hj1 SELECT 131072 * RAND() FROM hj1 a JOIN hj1 b;
+INSERT INTO hj1 SELECT 131072 * RAND() FROM hj1 a JOIN hj1 b;
+INSERT INTO hj1 SELECT 131072 * RAND() FROM hj1 a JOIN hj1 b;
+
+CREATE TABLE hj2 (c1 INT);
+
 INSERT INTO hj2 SELECT * FROM hj1;
 
--- Only shows in JSON format (!)
-EXPLAIN FORMAT=JSON SELECT * FROM hj1 JOIN hj2 USING (c1)\G
+-- Only shows in TREE format (!)
+EXPLAIN FORMAT=TREE SELECT COUNT(*) FROM hj1 JOIN hj2 USING (c1) \G
 ```
+
+Internally, MySQL builds an in-memory hash table from a chosen "build" table, then iterates the other, "probe" table.
+
+If the build table doesn't fit in memory, then smaller ones are created, for each, one full probe scanning is performed.
+
+Clarify the conditionals: *all* tables must be equijoins, no LEFT/RIGHT joins.
 
 Filed bug about other EXPLAIN formats not showing the correct strategy.
 
-STUDY/WRITE: Hash join <> Block nested loop algo (https://dev.mysql.com/worklog/task/?id=2241)
+OPTIONAL: PHP methods hashing.
 
 ### `information_schema_stats_expiry`
 
@@ -264,11 +284,23 @@ Previous values: respectively, 10 and 75.
 
 Split into `innodb_stats_persistent_sample_pages` and `innodb_stats_transient_sample_pages` (depending on`innodb_stats_persistent`).
 
+Case where it helped us: column with few (in proportion) non-NULL values.
+
 ### Query caching is gone!
 
-STUDY: https://mysqlserverteam.com/mysql-8-0-retiring-support-for-the-query-cache
+In a nutshell, query caching can be expensive to maintain in highly concurrent contexts, and even more so, cause contention.
 
-### GROUP BY not ordered by default anymore
+References:
+
+- https://mysqlserverteam.com/mysql-8-0-retiring-support-for-the-query-cache
+- https://www.percona.com/blog/2015/01/02/the-mysql-query-cache-how-it-works-and-workload-impacts-both-good-and-bad
+- http://www.markleith.co.uk/2010/09/24/tracking-mutex-locks-in-a-process-list-mysql-55s-performance_schema
+
+OPTIONAL/STUDY: how to analyze query caching savings in a running system with MySQL 5.7 (at a minimum, examine the query used for checking contention)
+
+### GROUP BY not implicitly sorted anymore
+
+STUDY: https://mysqlserverteam.com/removal-of-implicit-and-explicit-sorting-for-group-by
 
 ```sh
 cat > /tmp/test1 << SQL
@@ -328,7 +360,7 @@ STUDY: (review article) trailing space due to new collation
 
 #### Columns/indexes now have less chars available
 
-STUDY: find query for at-risk indexes
+utf8mb4 characters will take 33% more, which must stay withing the InnoDB index limit, which is however, high (3072 bytes).
 
 - OPTIONAL/STUDY (3 articles): general considerations about VARCHARs/BLOBs
   - https://dev.mysql.com/doc/refman/8.0/en/char.html
@@ -349,7 +381,7 @@ STUDY: find query for at-risk indexes
 
 ### Gh-ost currently doesn't work!
 
-Use `pt-online-schema-change` (v3.1.0 is broken!)
+Use `pt-online-schema-change` (v3.1.0 is broken!) or Facebook's OnlineSchemaChange.
 
 ## Shortcomings in MySQL 8
 
