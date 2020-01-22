@@ -26,9 +26,6 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
     - [Columns/indexes now have less chars available](#columnsindexes-now-have-less-chars-available)
   - [TempTable engine](#temptable-engine)
   - [Gh-ost currently doesn't work!](#gh-ost-currently-doesnt-work)
-- [Shortcomings in MySQL 8](#shortcomings-in-mysql-8)
-  - [mysqldump not accepting patterns/mysqlpump broken](#mysqldump-not-accepting-patternsmysqlpump-broken)
-  - [FT index administration problems on mysql](#ft-index-administration-problems-on-mysql)
 
 ## Presentation Legenda/General dos/Personal notes
 
@@ -381,16 +378,6 @@ utf8mb4 characters will take 33% more, which must stay withing the InnoDB index 
 
 ### Gh-ost currently doesn't work!
 
-Use `pt-online-schema-change` (v3.1.0 is broken!) or Facebook's OnlineSchemaChange.
+There's a known [showstopper bug](https://github.com/github/gh-ost/issues/687) on the latest Gh-ost release, which prevents operations from succeeding on MySQL 8.
 
-## Shortcomings in MySQL 8
-
-### mysqldump not accepting patterns/mysqlpump broken
-
-OPTIONAL/WRITE: mysqldump not accepting patterns/mysqlpump broken
-
-EXPLAIN: `--innodb-optimize-keys`
-
-### FT index administration problems on mysql
-
-OPTIONAL/STUDY: FT index administration problems on mysql
+Use `pt-online-schema-change` v3.0.x (v3.1.0 is broken!) or Facebook's OnlineSchemaChange.
