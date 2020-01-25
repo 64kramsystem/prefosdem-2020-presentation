@@ -36,9 +36,9 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 | `EXPLAIN` | subject to bring up |
 | `OPTIONAL` | subject to potentially bring up |
 
-- WRITE: write myswitch(), which also automatically uses the database
-
 - OPTIONAL/STUDY: [MySQL LRU](https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html)
+
+- STUDY/WRITE: profiling in MySQL 8.0
 
 - Change buffer: buffer for secondary index changes, which can potentially be merged at a later time
 - Undo tablespaces (logs): information about how to rollback changes made by a transaction
@@ -47,20 +47,17 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 
 ## Introduction
 
-WRITE: introduction
+- WRITE: introduction
 
 ## Preset MySQL configuration, and general tooling introduction
 
 ```sh
-# Configuration
+ln -sf /home/saverio/code/myblog/files/WIP_fosdem_mysql_8_upgrade.cnf ~/.my.cnf
 
-cat files/WIP_fosdem_mysql_8_upgrade.cnf
+cat ~/.my.cnf
 
-which mystart
-which mystop
-
-# Make sure to start with the specific config file!
-# Alias `mysql` to `mysql -D temp`!
+cat ~/bin/mystop
+cat ~/bin/mystart
 ```
 
 ## Differences
@@ -166,23 +163,23 @@ Source: https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html.
 Data:
 
 ```sql
-CREATE TABLE ss1 (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
+CREATE TABLE ss (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
 
-INSERT INTO ss1 VALUES (1,1), (1,2), (1,3), (1,4), (1,5), (2,1), (2,2), (2,3), (2,4), (2,5);
-INSERT INTO ss1 SELECT f1, f2 + 5 FROM ss1;
-INSERT INTO ss1 SELECT f1, f2 + 10 FROM ss1;
-INSERT INTO ss1 SELECT f1, f2 + 20 FROM ss1;
-INSERT INTO ss1 SELECT f1, f2 + 40 FROM ss1;
+INSERT INTO ss VALUES (1,1), (1,2), (1,3), (1,4), (1,5), (2,1), (2,2), (2,3), (2,4), (2,5);
+INSERT INTO ss SELECT f1, f2 + 5 FROM ss;
+INSERT INTO ss SELECT f1, f2 + 10 FROM ss;
+INSERT INTO ss SELECT f1, f2 + 20 FROM ss;
+INSERT INTO ss SELECT f1, f2 + 40 FROM ss;
 
-ANALYZE TABLE ss1;
+ANALYZE TABLE ss;
 ```
 
 Comparison!:
 
 ```sh
 meld \
-  <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(ss1) */ f1, f2 FROM ss1 WHERE f2 > 40\G") \
-  <(mysql -e "EXPLAIN FORMAT=JSON SELECT                          f1, f2 FROM ss1 WHERE f2 > 40\G")
+  <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(ss) */ f1, f2 FROM ss WHERE f2 > 40\G") \
+  <(mysql -e "EXPLAIN FORMAT=JSON SELECT                         f1, f2 FROM ss WHERE f2 > 40\G")
 ```
 
 B+trees references:
@@ -193,9 +190,26 @@ B+trees references:
 - Index unique scan: a single traverse
 - Range scan: Index unique scan + leaves traversal
 
+- OPTIONAL: Find out the corresponding code in the `mysql-server` project source code.
+
 #### Loose index scan (OPTIONAL)
 
-- OPTIONAL/WRITE: Loose index scan (https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html): copy base data
+- Reference: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html
+
+```sql
+CREATE TABLE lis (f1 INT, f2 INT, KEY (f1, f2));
+
+INSERT INTO lis VALUES (1, 1), (2, 1), (2, 1), (3, 1);
+INSERT INTO lis SELECT RAND() * 5, RAND() * 16 FROM lis `a` JOIN lis `b`;
+INSERT INTO lis SELECT RAND() * 5, RAND() * 16 FROM lis `a` JOIN lis `b`;
+INSERT INTO lis SELECT RAND() * 5, RAND() * 16 FROM lis `a` JOIN lis `b`;
+
+ANALYZE TABLE lis;
+
+meld \
+  <(mysql -e "EXPLAIN FORMAT=JSON SELECT /*+ NO_RANGE_OPTIMIZATION(lis) */ f1, MIN(f2) FROM lis GROUP BY f1\G") \
+  <(mysql -e "EXPLAIN FORMAT=JSON SELECT                                   f1, MIN(f2) FROM lis GROUP BY f1\G") \
+```
 
 ### Optimizer switches: `hash_join=on`
 
@@ -228,7 +242,7 @@ Clarify the conditionals: *all* tables must be equijoins, no LEFT/RIGHT joins.
 
 Filed bug about other EXPLAIN formats not showing the correct strategy.
 
-OPTIONAL: PHP methods hashing.
+- OPTIONAL: PHP methods hashing.
 
 ### `information_schema_stats_expiry`
 
@@ -293,11 +307,34 @@ References:
 - https://www.percona.com/blog/2015/01/02/the-mysql-query-cache-how-it-works-and-workload-impacts-both-good-and-bad
 - http://www.markleith.co.uk/2010/09/24/tracking-mutex-locks-in-a-process-list-mysql-55s-performance_schema
 
-OPTIONAL/STUDY: how to analyze query caching savings in a running system with MySQL 5.7 (at a minimum, examine the query used for checking contention)
+- OPTIONAL/STUDY: how to analyze query caching savings in a running system with MySQL 5.7 (at a minimum, examine the query used for checking contention)
 
 ### GROUP BY not implicitly sorted anymore
 
-STUDY: https://mysqlserverteam.com/removal-of-implicit-and-explicit-sorting-for-group-by
+#### SQL overview
+
+- Reference: https://mysqlserverteam.com/removal-of-implicit-and-explicit-sorting-for-group-by
+
+```sql
+-- Perform procedure with MySQL 5.7
+-- ...
+
+CREATE TABLE gb (f1 INT, f2 INT);
+
+INSERT INTO gb VALUES (1, 1), (2, 2), (3, 3), (4, 4);
+INSERT INTO gb SELECT a.f1, a.f2 + 1 FROM gb `a` JOIN gb `b` USING (f1);
+
+SELECT * FROM gb ORDER BY f1, f2;
+
+mysql -e 'EXPLAIN FORMAT=JSON SELECT f1, SUM(f2) FROM gb GROUP BY f1\G' > ~/Desktop/gb5.txt
+
+-- Repeat procedure with MySQL 8.0
+-- ...
+
+mysql -e 'EXPLAIN FORMAT=JSON SELECT f1, SUM(f2) FROM gb GROUP BY f1\G' > ~/Desktop/gb8.txt
+```
+
+#### Isolating `GROUP BY`s without `ORDER` in the codebase
 
 ```sh
 cat > /tmp/test1 << SQL
@@ -348,12 +385,134 @@ grep -zP 'GROUP BY .+\n((?!ORDER BY ).)*\n' /tmp/test*
 
 ### utf8mb4
 
-STUDY: review article
+- STUDY: review article utf8mb4
+
+#### Improvements of the collation
+
+Reference: https://mysqlserverteam.com/mysql-8-0-collations-the-devil-is-in-the-details
+
+It's simply more correct on some cases. See:
+
+```sql
+-- Å = U+212B
+SELECT "Å" = "a" COLLATE utf8mb4_general_ci `result`;
+-- +--------+
+-- | result |
+-- +--------+
+-- |      0 |
+-- +--------+
+
+SELECT "Å" = "a" `result`; -- Default (COLLATE utf8mb4_0900_ai_ci);
+-- +--------+
+-- | result |
+-- +--------+
+-- |      1 |
+-- +--------+
+```
+
+#### Connection configuration
+
+```sql
+SHOW VARIABLES WHERE Variable_name RLIKE '^(character_set|collation)_' AND Variable_name NOT RLIKE 'system|database';
+-- +--------------------------+--------------------+
+-- | Variable_name            | Value              |
+-- +--------------------------+--------------------+
+-- | character_set_client     | utf8mb4            |  -- literals sent are assumed to be this; then they're converted to the `character_set_connection``
+-- | character_set_connection | utf8mb4            |  -- literals charset
+-- | collation_connection     | utf8mb4_0900_ai_ci |  -- literals collation
+
+-- | character_set_results    | utf8mb4            |
+
+-- | character_set_server     | utf8mb4            |  - used for objects
+-- | collation_server         | utf8mb4_0900_ai_ci |  - used for objects
+-- +--------------------------+--------------------+
+```
+
+#### Collation coercion, and issues `general` <> `0900_ai`
+
+Reference: https://dev.mysql.com/doc/refman/8.0/en/charset-collation-coercibility.html
+
+```sql
+CREATE TABLE tcolls (
+  c3_gen CHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci,
+  c4_gen CHAR(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci,
+  c4_900 CHAR(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci
+);
+INSERT INTO tcolls VALUES('ä', 'ä', 'ä');
+```
+
+##### Case 1: Success
+
+```sql
+SELECT c3_gen = _utf8mb4'ä' `result` FROM tcolls;
+-- +--------+
+-- | result |
+-- +--------+
+-- |      1 |
+-- +--------+
+```
+
+Easy; it works.
+
+##### Case 2: Success
+
+```sql
+SELECT c3_gen = _utf8mb4'🍕' COLLATE utf8mb4_bin `result` FROM tcolls;
+-- +--------+
+-- | result |
+-- +--------+
+-- |      0 |
+-- +--------+
+```
+
+In the case above:
+
+- column coercibility value: 2
+- explicit collate value:    0
+
+MySQL converts the first value and uses the explicit collation.
+
+##### Case 3: Failure
+
+```sql
+SELECT c3_gen = _utf8mb4'🍕' `result` FROM tcolls;
+```
+
+Weird? This is because:
+
+- column coerc. value:             2
+- implicit collation coerc. value: 4
+
+So MySQL tries to convert the second value, and fails!
+
+##### Case 4: Other failure
+
+```sql
+SELECT COUNT(*) FROM tcolls a JOIN tcolls b ON a.c3_gen = b.c4_gen;
+-- ok
+
+SELECT COUNT(*) FROM tcolls a JOIN tcolls b ON a.c3_gen = b.c4_900;
+-- ok
+
+SELECT COUNT(*) FROM tcolls a JOIN tcolls b ON a.c4_gen = b.c4_900;
+-- ko!
+```
+
+#### Issues with `0900_ai` trailing space
+
+- STUDY: (review article) trailing space due to new collation
+
+#### Issue with triggers
+
+- WRITE: utf8mb4 Issue with triggers
+
+#### Behavior with indexes
+
+- WRITE: indexes behavior inter-charset (func)
 
 #### Different collation
 
-STUDY: test on mac -> client with utf8 compiled (collation can't be specified)
-STUDY: (review article) trailing space due to new collation
+- OPTIONAL/STUDY: test on mac -> client with utf8 compiled (collation can't be specified)
 
 #### Columns/indexes now have less chars available
 
@@ -375,6 +534,46 @@ utf8mb4 characters will take 33% more, which must stay withing the InnoDB index 
 
 > Some query conditions prevent the use of an in-memory temporary table, in which case the server uses an on-disk table instead: Presence of a BLOB or TEXT column in the table.
 > In-memory temporary tables are managed by the MEMORY storage engine, which uses fixed-length row format. VARCHAR and VARBINARY column values are padded to the maximum column length, in effect storing them as CHAR and BINARY columns.
+
+Demonstration of the point, on MySQL 5.7:
+
+```sql
+CREATE TABLE tt (
+  f1 INT,
+  f2 TEXT
+);
+INSERT INTO tt VALUES (1, 'a'), (2, 'a'), (3, 'a'), (3, 'b');
+
+EXPLAIN SELECT f1, SUM(f2) FROM tt GROUP BY f1;
+-- +----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-----------------+
+-- | id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra           |
+-- +----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-----------------+
+-- |  1 | SIMPLE      | tt    | NULL       | ALL  | NULL          | NULL | NULL    | NULL |    4 |   100.00 | Using temporary |
+-- +----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-----------------+
+
+SHOW GLOBAL STATUS LIKE '%tmp%tables';
+-- +-------------------------+-------+
+-- | Variable_name           | Value |
+-- +-------------------------+-------+
+-- | Created_tmp_disk_tables | 12    |
+-- | Created_tmp_tables      | 16    |
+-- +-------------------------+-------+
+
+SELECT f1, GROUP_CONCAT(f2) FROM tt GROUP BY f1;
+-- ...
+
+SHOW GLOBAL STATUS LIKE '%tmp%tables';
+-- +-------------------------+-------+
+-- | Variable_name           | Value |
+-- +-------------------------+-------+
+-- | Created_tmp_disk_tables | 13    |
+-- | Created_tmp_tables      | 18    |
+-- +-------------------------+-------+
+```
+
+(note that SHOW GLOBAL STATUS uses a temporary table!)
+
+When trying the same on MySQL 8.0, the `Created_tmp_disk_tables` count is not increased!
 
 ### Gh-ost currently doesn't work!
 
