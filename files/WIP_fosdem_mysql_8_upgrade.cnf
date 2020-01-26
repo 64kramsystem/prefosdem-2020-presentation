@@ -7,6 +7,9 @@ innodb_log_group_home_dir = /dev/shm/mysql_logs
 lc_messages_dir           = /home/saverio/local/mysql/share
 character_set_server      = utf8mb4
 
+general_log = ON
+log_output = TABLE
+
 [client]
 
 user = root
