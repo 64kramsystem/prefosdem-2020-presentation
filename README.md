@@ -1,5 +1,3 @@
-# PreFOSDEM 2020 Presentation
-
 Base of my MySQL preFOSDEM 2020 presentation.
 
 Will be published shortly (before or after) the PreFOSDEM.
