@@ -1,9 +1,0 @@
-CREATE TABLE ssr (f1 INT NOT NULL, f2 INT NOT NULL, PRIMARY KEY(f1, f2));
-
-INSERT INTO ssr VALUES (1,1), (1,2), (1,3), (1,4), (1,5), (2,1), (2,2), (2,3), (2,4), (2,5);
-INSERT INTO ssr SELECT f1, f2 + 5 FROM ssr;
-INSERT INTO ssr SELECT f1, f2 + 10 FROM ssr;
-INSERT INTO ssr SELECT f1, f2 + 20 FROM ssr;
-INSERT INTO ssr SELECT f1, f2 + 40 FROM ssr;
-
-ANALYZE TABLE ssr;

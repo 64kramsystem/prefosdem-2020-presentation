@@ -4,94 +4,56 @@ title: WIP FOSDEM MySQL 8 Upgrade
 tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 ---
 
-- [Preset MySQL configuration, and tooling](#preset-mysql-configuration-and-tooling)
-- [Curiosity: `innodb_data_file_path` can now reside anywhere!](#curiosity-innodb_data_file_path-can-now-reside-anywhere)
-  - [System tablespace changes](#system-tablespace-changes)
-- [First step before upgrading: output and compare the global system variables](#first-step-before-upgrading-output-and-compare-the-global-system-variables)
-- [utf8mb4](#utf8mb4)
-  - [Improvements of the collation](#improvements-of-the-collation)
-  - [Connection configuration](#connection-configuration)
+- [Introduction: Who am I](#introduction-who-am-i)
+- [Introduction: Presentation and target audience](#introduction-presentation-and-target-audience)
+- [Preparing MySQL: setup and tooling](#preparing-mysql-setup-and-tooling)
+- [First step: compare the global system variables](#first-step-compare-the-global-system-variables)
+- [Migrating to utf8mb4: Summary](#migrating-to-utf8mb4-summary)
+  - [How the charset parameters work](#how-the-charset-parameters-work)
   - [Collation coercion, and issues `general` <> `0900_ai`](#collation-coercion-and-issues-general--0900_ai)
-    - [Case 1: Success (3_col_gen <> 4_impl_ä)](#case-1-success-3_col_gen--4_impl_ä)
-    - [Case 2: Success (3_col_gen <> 4_expl_pizza)](#case-2-success-3_col_gen--4_expl_pizza)
-    - [Case 3: Failure (3_col_gen <> 4_impl_pizza)](#case-3-failure-3_col_gen--4_impl_pizza)
-    - [Case 4: Other failure (c3_gen <> b.c4_gen, c3_gen <> c4_900, c4_gen <> c4_900)](#case-4-other-failure-c3_gen--bc4_gen-c3_gen--c4_900-c4_gen--c4_900)
+    - [Comparisons utf8_general_ci column <> literals](#comparisons-utf8_general_ci-column--literals)
+    - [Comparisons utf8_general_ci column <> columns](#comparisons-utf8_general_ci-column--columns)
   - [Issues with `0900_ai` collation padding](#issues-with-0900_ai-collation-padding)
-  - [Issue with triggers](#issue-with-triggers)
+  - [Issues with triggers](#issues-with-triggers)
   - [Behavior with indexes](#behavior-with-indexes)
   - [Consequences of the increase in (potential) size of char columns](#consequences-of-the-increase-in-potential-size-of-char-columns)
-  - [Mac Homebrew default collation](#mac-homebrew-default-collation)
-- [SQL mode: `NO_AUTO_CREATE_USER`](#sql-mode-no_auto_create_user)
-- [Skip scan range](#skip-scan-range)
-  - [Loose index scan (related subject, not 8.0)](#loose-index-scan-related-subject-not-80)
-- [Hash join](#hash-join)
-  - [Issues with EXPLAIN](#issues-with-explain)
-- [`information_schema_stats_expiry`](#information_schema_stats_expiry)
-- [`innodb_flush_neighbors`](#innodb_flush_neighbors)
-- [`innodb_max_dirty_pages_pct_lwm`, `innodb_max_dirty_pages_pct`](#innodb_max_dirty_pages_pct_lwm-innodb_max_dirty_pages_pct)
+  - [Mac Homebrew default collation is `utf8mb4_general_ci`!](#mac-homebrew-default-collation-is-utf8mb4_general_ci)
+- [`information_schema_stats_expiry` introduction](#information_schema_stats_expiry-introduction)
 - [GROUP BY is now unsorted (not implicitly sorted)](#group-by-is-now-unsorted-not-implicitly-sorted)
-  - [SQL overview](#sql-overview)
-  - [Searching `GROUP BY`s without `ORDER` in the codebase](#searching-group-bys-without-order-in-the-codebase)
-- [TempTable engine](#temptable-engine)
 - [Schema migration tool issues](#schema-migration-tool-issues)
-- [Questions time](#questions-time)
-- [Extra topics](#extra-topics)
-  - [Turbocharge MySQL write capacity using an NVRAM device, or /dev/shm (tmpfs) in dev environments](#turbocharge-mysql-write-capacity-using-an-nvram-device-or-devshm-tmpfs-in-dev-environments)
-  - [Negative regex (for GROUP BY)](#negative-regex-for-group-by)
-- [Secondary/discarded topics](#secondarydiscarded-topics)
-  - [Debate about doublewrite (read sources)](#debate-about-doublewrite-read-sources)
-  - [Query caching is gone!](#query-caching-is-gone)
-  - [In-depth review of VARCHARs/BLOBs](#in-depth-review-of-varcharsblobs)
+- [Conclusion](#conclusion)
+- [Extra: `innodb_flush_neighbors`](#extra-innodb_flush_neighbors)
 
-## Preset MySQL configuration, and tooling
+## Introduction: Who am I
+
+## Introduction: Presentation and target audience
+
+The presentation shows the core problems to take care of - more advanced (eg. at scale) problems are not tackled, e.g. `innodb_max_dirty_pages_pct[_lwm]`.
+
+## Preparing MySQL: setup and tooling
 
 ```sh
+cd ~/local
+ls -l
+
+tar xvf *5.7* && tar xvf *8.0*
+
 ln -sf ~/code/prefosdem-2020-presentation/files/my.cnf ~/.my.cnf
 
 cat ~/.my.cnf
 
-cat ~/bin/mystop
-cat ~/bin/mystart
-cat ~/code/openscripts/mylast
+cat $(which mystop)
+cat $(which mystart)
+cat $(which mylast)
 ```
 
-## Curiosity: `innodb_data_file_path` can now reside anywhere!
-
-In MySQL 8.0, the system tablespace can be placed anywhere.
-
-Test the followin on MySQL 5.7 (optionally, with a working configuration) and 8.0:
-
-```
-datadir                   = /home/saverio/databases/mysql_data
-innodb_data_home_dir      = /dev/shm/mysql_logs
-innodb_data_file_path     = /dev/shm/mysql_logs/ibdata1:12M:autoextend			# Won't work on v5.7, because it's an absolute path
-```
-
-Filed bug about documentation.
-
-### System tablespace changes
-
-The system tablespace currently includes:
-
-- Doublewrite buffer
-- Change buffer: buffer for secondary index changes, which can potentially be merged at a later time
-
-Previously, it included:
-
-- Undo tablespaces (logs): information about how to rollback changes made by a transaction; now in dedicated tablespace(s)
-- InnoDB data dictionary: now stored in the MySQL data dictionary
-
-## First step before upgrading: output and compare the global system variables
+## First step: compare the global system variables
 
 The general idea is to get a nice, ordered layout for comparing.
 
-Show differences between:
+Run on MySQL 5.7.
 
-- plain `SHOW`
-- `SHOW ... WHERE`
-- `SHOW ... RLIKE`
-
-Run on MySQL 5.7; capture the long ones into separate text file, and the short ones into meld:
+First show the base output, then enhance it, capture it and copy it to meld:
 
 ```sql
 SHOW GLOBAL VARIABLES;
@@ -107,13 +69,16 @@ SHOW GLOBAL VARIABLES WHERE Variable_name     RLIKE "optimizer_switch|sql_mode";
 SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch|sql_mode";
 ```
 
-## utf8mb4
+## Migrating to utf8mb4: Summary
 
-### Improvements of the collation
+References
 
-Reference: https://mysqlserverteam.com/mysql-8-0-collations-the-devil-is-in-the-details
+- https://mysqlserverteam.com/mysql-8-0-collations-the-devil-is-in-the-details
+- http://mysqlserverteam.com/new-collations-in-mysql-8-0-0
 
-It's simply more correct on some cases. See:
+Improvements of the collation - it's updated to Unicode 9.0, with a new collation.
+
+Typical example - more correct accent insensitivity:
 
 ```sql
 -- Å = U+212B
@@ -132,7 +97,9 @@ SELECT "Å" = "a" `result`; -- Default (COLLATE utf8mb4_0900_ai_ci);
 -- +--------+
 ```
 
-### Connection configuration
+Explain history of the 0900 decision, and problems with web documentation.
+
+### How the charset parameters work
 
 ```sql
 SHOW VARIABLES WHERE Variable_name RLIKE '^(character_set|collation)_' AND Variable_name NOT RLIKE 'system|database';
@@ -156,9 +123,11 @@ Reference: https://dev.mysql.com/doc/refman/8.0/en/charset-collation-coercibilit
 
 Load `datasets/collation_coercion.sql`.
 
-Explain history of the 0900 decision, and problems with web documentation.
+#### Comparisons utf8_general_ci column <> literals
 
-#### Case 1: Success (3_col_gen <> 4_impl_ä)
+Reference: https://dev.mysql.com/doc/refman/8.0/en/charset-collation-coercibility.html
+
+Comparison vs BMP utf8mb4:
 
 ```sql
 SELECT c3_gen = _utf8mb4'ä' `result` FROM tcolls;
@@ -176,7 +145,7 @@ Coercion values:
 - column:           2
 - literal implicit: 4
 
-#### Case 2: Success (3_col_gen <> 4_expl_pizza)
+Comparison vs SMP (supplementary multilingual plane) character (emoji), with explicit collation:
 
 ```sql
 SELECT c3_gen = _utf8mb4'🍕' COLLATE utf8mb4_bin `result` FROM tcolls;
@@ -194,7 +163,7 @@ Coercion values:
 
 MySQL converts the first value and uses the explicit collation.
 
-#### Case 3: Failure (3_col_gen <> 4_impl_pizza)
+Comparison vs BMP utf8mb4 supplementary plan character (emoji), with implicit collation:
 
 ```sql
 SELECT c3_gen = _utf8mb4'🍕' `result` FROM tcolls;
@@ -207,9 +176,17 @@ Weird? This is because:
 
 So MySQL tries to convert the second value, and fails!
 
+> 0: An explicit COLLATE clause (not coercible at all)
+> 1: The concatenation of two strings with different collations
+> 2: The collation of a column or a stored routine parameter or local variable
+> 3: A “system constant” (the string returned by functions such as USER() or VERSION())
+> 4: The collation of a literal
+> 5: The collation of a numeric or temporal value
+> 6: NULL or an expression that is derived from NULL
+
 This is a problem if an application is in the migration process, and allows characters outside the "Basic Multilingual Plane" ("BMP").
 
-#### Case 4: Other failure (c3_gen <> b.c4_gen, c3_gen <> c4_900, c4_gen <> c4_900)
+#### Comparisons utf8_general_ci column <> columns
 
 ```sql
 SELECT COUNT(*) FROM tcolls a JOIN tcolls b ON a.c3_gen = b.c4_gen;
@@ -226,46 +203,29 @@ This is a big problem for application that already migrated to `utf8mb4_general_
 
 ### Issues with `0900_ai` collation padding
 
-(**attention**: must be run on different versions, otherwise, the column collation needs to be taken care of).
-
-Load `collation_padding.sql`; run on MySQL 5.7:
+Difference in behavior:
 
 ```sql
-SHOW VARIABLES WHERE Variable_Name RLIKE '^(character_set|collation)' AND Variable_Name NOT RLIKE 'system|database|dir';
+-- Simulated (close enough) MySQL 5.7
+--
+SELECT '' = _utf8' ' COLLATE utf8_general_ci;
+-- +---------------------------------------+
+-- | '' = _utf8' ' COLLATE utf8_general_ci |
+-- +---------------------------------------+
+-- |                                     1 |
+-- +---------------------------------------+
 
--- +--------------------------+--------------------+
--- | Variable_name            | Value              |
--- +--------------------------+--------------------+
--- | character_set_client     | utf8               |
--- | character_set_connection | utf8               |
--- | character_set_results    | utf8               |
--- | character_set_server     | utf8mb4            |
--- | collation_connection     | utf8_general_ci    | -- Here!
--- | collation_server         | utf8mb4_general_ci |
--- +--------------------------+--------------------+
-
-SELECT CONCAT("'", str, "'") `qstr`, str = '' , str = ' ' FROM cp;
--- ------+----------+-----------+
---  qstr | str = '' | str = ' ' |
--- ------+----------+-----------+
---  ''   |        1 |         1 |
---  ' '  |        1 |         1 |
--- ------+----------+-----------+
+-- Current (8.0):
+--
+SELECT '' = ' ';
+-- +----------+
+-- | '' = ' ' |
+-- +----------+
+-- |        0 |
+-- +----------+
 ```
 
-Load `collation_padding.sql`; run on MySQL 8.0:
-
-```sql
-SELECT CONCAT("'", str, "'") `qstr`, str = '' , str = ' ' FROM cp;
--- +------+----------+-----------+
--- | qstr | str = '' | str = ' ' |
--- +------+----------+-----------+
--- | ''   |        1 |         0 |
--- | ' '  |        0 |         1 |
--- +------+----------+-----------+
-```
-
-Where does this behavior come from? Let's check the collation (**attention**: it's `SHOW COLLATION`, without `s`).
+Ouch! Where does this behavior come from? Let's check the collation (**attention**: it's `SHOW COLLATION`, without `s`, and use the field name (`Collation`)).
 
 ```sql
 SHOW COLLATION WHERE Collation RLIKE 'utf8(mb4)?_(general|0900_ai)_ci';
@@ -282,62 +242,18 @@ The following are the formal rules from the SQL (2003) standard (section 8.2):
 
 > 3) The comparison of two character strings is determined as follows:
 >
-> a) Let CS be the collation as determined by Subclause 9.13, “Collation determination”, for the declared
->    types of the two character strings.
+> a) Let CS be the collation [...]
 >
 > b) <u>If the length in characters of X is not equal to the length in characters of Y, then the shorter string is
 >    effectively replaced, for the purposes of comparison, with a copy of itself that has been extended to
 >    the length of the longer string by concatenation on the right of one or more pad characters</u>, where the
 >    pad character is chosen based on CS. <u>If CS has the NO PAD characteristic, then the pad character is
 >    an implementation-dependent character</u> different from any character in the character set of X and Y
->    that collates less than any string under CS. Otherwise, the pad character is a \<space\>.
->
-> c) The result of the comparison of X and Y is given by the collation CS.
->
-> d) Depending on the collation, two strings may compare as equal even if they are of different lengths or
->    contain different sequences of characters. When any of the operations MAX, MIN, and DISTINCT
->    reference a grouping column, and the UNION, EXCEPT, and INTERSECT operators refer to character
->    strings, the specific value selected by these operations from a set of such equal values is implementation-
->    dependent.
+>    that collates less than any string under CS. Otherwise, the pad character is a space.
 
-Is there any utf8mb4 0900 collation with `PAD SPACE`?
+Conclusion: before migrating, data must be trimmed, and must be 100% sure that the app doesn't introduce new instances.
 
-```sql
-SHOW COLLATION WHERE Collation RLIKE 'utf8.+0900_ai_ci';
--- +----------------------------+---------+-----+---------+----------+---------+---------------+
--- | Collation                  | Charset | Id  | Default | Compiled | Sortlen | Pad_attribute |
--- +----------------------------+---------+-----+---------+----------+---------+---------------+
--- | utf8mb4_0900_ai_ci         | utf8mb4 | 255 | Yes     | Yes      |       0 | NO PAD        |
--- | utf8mb4_0900_as_ci         | utf8mb4 | 305 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_cs_0900_ai_ci      | utf8mb4 | 266 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_da_0900_ai_ci      | utf8mb4 | 267 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_de_pb_0900_ai_ci   | utf8mb4 | 256 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_eo_0900_ai_ci      | utf8mb4 | 273 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_es_0900_ai_ci      | utf8mb4 | 263 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_es_trad_0900_ai_ci | utf8mb4 | 270 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_et_0900_ai_ci      | utf8mb4 | 262 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_hr_0900_ai_ci      | utf8mb4 | 275 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_hu_0900_ai_ci      | utf8mb4 | 274 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_is_0900_ai_ci      | utf8mb4 | 257 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_la_0900_ai_ci      | utf8mb4 | 271 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_lt_0900_ai_ci      | utf8mb4 | 268 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_lv_0900_ai_ci      | utf8mb4 | 258 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_pl_0900_ai_ci      | utf8mb4 | 261 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_ro_0900_ai_ci      | utf8mb4 | 259 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_ru_0900_ai_ci      | utf8mb4 | 306 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_sk_0900_ai_ci      | utf8mb4 | 269 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_sl_0900_ai_ci      | utf8mb4 | 260 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_sv_0900_ai_ci      | utf8mb4 | 264 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_tr_0900_ai_ci      | utf8mb4 | 265 |         | Yes      |       0 | NO PAD        |
--- | utf8mb4_vi_0900_ai_ci      | utf8mb4 | 277 |         | Yes      |       0 | NO PAD        |
--- +----------------------------+---------+-----+---------+----------+---------+---------------+
-```
-
-Ouch! Apps will need to be updated to reflect this.
-
-Conclusion: MySQL doesn't "remove all the trailing spaces" after all 😄
-
-### Issue with triggers
+### Issues with triggers
 
 The trigger properties can be handled like the client charset/collation, however, it's crucial not to forget to change `COLLATION` modifiers inside the triggers.
 
@@ -412,29 +328,54 @@ EXPLAIN FORMAT=TREE SELECT COUNT(*) FROM ci3 JOIN ci4 ON c3 = c4\G
 
 Reference: https://dev.mysql.com/doc/refman/8.0/en/char.html
 
-utf8mb4 characters will take 33% more, which must stay withing the InnoDB index limit, which is however, high (3072 bytes).
+utf8mb4 characters will take 33% more, which must stay withing the InnoDB index limit, which is however (as of 8.0 default), high (3072 bytes).
 
-> InnoDB encodes fixed-length fields greater than or equal to 768 bytes in length as variable-length fields, which can be stored off-page
+There may be details, but the above is a high-level guideline.
 
-### Mac Homebrew default collation
+Remember:
 
-When MySQL is installed via Homebrew, the default collation is `utf8mb4_general_ci`:
+- `[VAR]CHAR(n)` refers to the number of characters; therefore, the maximum requirement is `4 * n` bytes
+- `TEXT` fields refer to the number of bytes
+
+### Mac Homebrew default collation is `utf8mb4_general_ci`!
+
+When MySQL is installed via Homebrew, the default collation is `utf8mb4_general_ci`.
+
+**attention: don't forget to pass the filename**
 
 ```sh
-# Mac's standard grep doesn't support Perl regexes.
-#
-$ grep "DEFAULT_C" "$(brew formula mysql)"
-      -DDEFAULT_CHARSET=utf8mb4
-      -DDEFAULT_COLLATION=utf8mb4_general_ci
+cd ~/code/homebrew-core-dev/Formula
 
-mysql> SHOW GLOBAL VARIABLES LIKE 'collation_%';
-+----------------------+--------------------+
-| Variable_name        | Value              |
-+----------------------+--------------------+
-| collation_connection | utf8mb4_general_ci |
-| collation_database   | utf8mb4_general_ci |
-| collation_server     | utf8mb4_general_ci |
-+----------------------+--------------------+
+# Print relevant section:
+#
+perl -ne 'print if /args = / .. /\]/' mysql.rb
+#    args = %W[
+#      -DFORCE_INSOURCE_BUILD=1
+#      -DCOMPILATION_COMMENT=Homebrew
+#      -DDEFAULT_CHARSET=utf8mb4
+#      -DDEFAULT_COLLATION=utf8mb4_general_ci
+#      -DINSTALL_DOCDIR=share/doc/#{name}
+#      -DINSTALL_INCLUDEDIR=include/mysql
+#      -DINSTALL_INFODIR=share/info
+#      -DINSTALL_MANDIR=share/man
+#      -DINSTALL_MYSQLSHAREDIR=share/mysql
+#      -DINSTALL_PLUGINDIR=lib/plugin
+#      -DMYSQL_DATADIR=#{datadir}
+#      -DSYSCONFDIR=#{etc}
+#      -DWITH_BOOST=boost
+#      -DWITH_EDITLINE=system
+#      -DWITH_SSL=yes
+#      -DWITH_PROTOBUF=system
+#      -DWITH_UNIT_TESTS=OFF
+#      -DENABLED_LOCAL_INFILE=1
+#      -DWITH_INNODB_MEMCACHED=ON
+#    ]
+
+# Fix it!
+#
+perl -i -ne 'print unless /CHARSET|COLLATION/' mysql.rb
+
+git diff
 ```
 
 This will cause problems when connecting to an 8.0 server with standard defaults.
@@ -457,127 +398,19 @@ brew reinstall --build-from-source mysql
 
 Setting `character-set-client-handshake = OFF` in the MySQL configuration will impose on the clients the the default server character set.
 
-## SQL mode: `NO_AUTO_CREATE_USER`
-
-On MySQL 5.7, users could be implicitly created via GRANT:
-
-```sql
-GRANT ALL ON *.* TO sav_test@'%';
--- success
-```
-
-It fails on MySQL 8.0; it needs to be manually create:
-
-```sql
-GRANT ALL ON *.* TO sav_test@'%';
-ERROR 1410 (42000): You are not allowed to create a user with GRANT
-
-CREATE USER sav_test@'%' IDENTIFIED BY 'pwd';
--- success
-
-GRANT ALL ON *.* TO sav_test@'%';
--- success
-```
-
-It's a design improvement, to decouple users from their permissions. However, note that the backing data still uses a single concept:
-
-```sql
-CREATE USER paolo_test;
-
-SELECT * FROM mysql.user WHERE User = 'paolo_test'\G
-```
-
-## Skip scan range
-
-References:
-
-- https://dev.mysql.com/doc/refman/8.0/en/range-optimization.html
-- https://blog.jcole.us/2013/01/10/btree-index-structures-in-innodb
-- http://mlwiki.org/index.php/B-Tree#Range_Lookups
-
-Summary: for each distinct f1 value, perform a subrange scan (f1, {f2_condition})
-
-Load `skip_scan_range.sql`.
-
-Show the base explain:
-
 ```sh
-EXPLAIN SELECT f1, f2 FROM ssr WHERE f2 > 40;
+# Show setting:
+#
+mysqld --verbose --help | grep handshake
 ```
 
-Then compare the costs without/with:
-
-```sql
-EXPLAIN FORMAT=JSON SELECT /*+ NO_SKIP_SCAN(ssr) */ f1, f2 FROM ssr WHERE f2 > 40\G
-```
-
-Explain two ways of comparing plans - `mylast` and Bash process substitution.
-
-### Loose index scan (related subject, not 8.0)
-
-Reference: https://dev.mysql.com/doc/refman/8.0/en/group-by-optimization.html
-
-Load `loose_index_scan.sql`.
-
-Explain how to easily load random data:
-
-- at the 3rd iteration: 176k (base = 4 records), 870k (base = 5 record)
-- `@UPPER_BOUND * RAND()`, for integers;
-- `HEX(RANDOM_BYTES(@CHAR_PAIRS))`, for (hex) strings (one pair is the minimum).
-
-Compare the results without/with optimization:
-
-```sql
-EXPLAIN FORMAT=JSON SELECT /*+ NO_RANGE_OPTIMIZATION(lis) */ f1, MIN(f2) FROM lis GROUP BY f1\G
-```
-
-## Hash join
-
-Sources:
-
-- https://dev.mysql.com/worklog/task/?id=2241#tabs-2241-4
-- https://www.percona.com/blog/2019/10/30/understanding-hash-joins-in-mysql-8
-
-Internally, MySQL builds an in-memory hash table from a chosen "build" table, then iterates the other, "probe" table.
-
-If the build table doesn't fit in memory, then smaller (build) ones are created, and for each, one full probe scanning is performed.
-
-Clarify the conditionals: *all* tables must be equijoins, no LEFT/RIGHT joins.
-
-Load `hash_join.sql`.
-
-```sql
-EXPLAIN FORMAT=TREE SELECT COUNT(*) FROM hj1 JOIN hj2 USING (c1)\G
--- -> Aggregate: count(0)
---     -> Inner hash join (hj2.c1 = hj1.c1)  (cost=3138584750.70 rows=3138566607)
---         -> Table scan on hj2  (cost=0.01 rows=177160)
---         -> Hash
---             -> Table scan on hj1  (cost=17804.25 rows=177160)
-```
-
-Filed bug about other EXPLAIN formats not showing the correct strategy (was duplicate).
-
-- Fun fact: [PHP method names hashing](https://www.i-programmer.info/news/98-languages/6758-the-reason-for-the-weird-php-function-names.html).
-
-### Issues with EXPLAIN
-
-Hash join plans currently show only in `EXPLAIN FORMAT=TREE`.
-
-Both in the standard and JSON format, they show as BLock Nested loop:
-
-```sql
-EXPLAIN SELECT COUNT(*) FROM hj1 JOIN hj2 USING (f1);
-
-EXPLAIN FORMAT=JSON SELECT COUNT(*) FROM hj1 JOIN hj2 USING (f1)\G
-```
-
-## `information_schema_stats_expiry`
+## `information_schema_stats_expiry` introduction
 
 Reference: https://dev.mysql.com/doc/refman/8.0/en/statistics-table.html
 
-```sql
-CREATE TABLE ainc (id INT AUTO_INCREMENT PRIMARY KEY);
+Load `information_schema_stats_expiry.sql`.
 
+```sql
 SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'ainc';
 -- +------------+----------------+
 -- | TABLE_NAME | AUTO_INCREMENT |
@@ -594,6 +427,12 @@ SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_nam
 -- | ainc       |           NULL |
 -- +------------+----------------+
 
+SHOW CREATE TABLE ainc;
+CREATE TABLE `ainc` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci |
+
 ANALYZE TABLE ainc;
 
 SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'ainc';
@@ -602,39 +441,16 @@ SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_nam
 -- +------------+----------------+
 -- | ainc       |              2 |
 -- +------------+----------------+
+
+SHOW GLOBAL VARIABLES LIKE '%stat%exp%';
+-- +---------------------------------+-------+
+-- | Variable_name                   | Value |
+-- +---------------------------------+-------+
+-- | information_schema_stats_expiry | 86400 |
+-- +---------------------------------+-------+
 ```
-
-## `innodb_flush_neighbors`
-
-> When the table data is stored on a traditional HDD storage device, flushing such neighbor pages in one operation reduces I/O overhead (primarily for disk seek operations) compared to flushing individual pages at different times
-> [...] buffer pool flushing is performed by page cleaner threads
-
-## `innodb_max_dirty_pages_pct_lwm`, `innodb_max_dirty_pages_pct`
-
-> Buffer pool flushing is initiated when the percentage of dirty pages reaches the low water mark value defined by the `innodb_max_dirty_pages_pct_lwm` variable. The default low water mark is 10% of buffer pool pages.
-> The purpose of the `innodb_max_dirty_pages_pct_lwm` threshold is to control the percentage dirty pages in the buffer pool, and to prevent the amount of dirty pages from reaching the threshold defined by the `innodb_max_dirty_pages_pct` variable, which has a default value of 90. InnoDB aggressively flushes buffer pool pages if the percentage of dirty pages in the buffer pool reaches the innodb_max_dirty_pages_pct threshold.
-
-Previous values: respectively, 10 and 75.
 
 ## GROUP BY is now unsorted (not implicitly sorted)
-
-### SQL overview
-
-- Reference: https://mysqlserverteam.com/removal-of-implicit-and-explicit-sorting-for-group-by
-
-Load `groupby_unsorted.sql`.
-
-Run on MySQL 5.7 and 8.0, and compare:
-
-```sql
-EXPLAIN FORMAT=JSON SELECT f1, SUM(f2) FROM gbu GROUP BY f1\G
-```
-
-The sort cost is (estimated) to be a very large part of the query!
-
-Remember that cost is relative.
-
-### Searching `GROUP BY`s without `ORDER` in the codebase
 
 Load `groupby_codebase_search.sh`.
 
@@ -658,92 +474,26 @@ perl -MEnglish -ne 'print "$ARGV: $previous $ARG" if $previous =~ /GROUP BY/ && 
 # - we're ignoring filenames duplication
 #
 perl -MEnglish -lne 'print $ARGV if $previous =~ /GROUP BY/ && !/ORDER BY/; $previous = $ARG' /tmp/test* | xargs code
+
+# Freaky version, with negative regex match
+#
+# Reference: https://stackoverflow.com/a/406408
+#
+grep -zP 'GROUP BY .+\n((?!ORDER BY ).)*\n' /tmp/test*
 ```
-
-## TempTable engine
-
-> [...] the TempTable storage engine, which is the default storage engine for in-memory internal temporary tables in MySQL 8.0, supports binary large object types as of MySQL 8.0.13. See Internal Temporary Table Storage Engine.
-> The TempTable storage engine provides efficient storage for VARCHAR and VARBINARY columns.
-
-5.7 was:
-
-> Some query conditions prevent the use of an in-memory temporary table, in which case the server uses an on-disk table instead: Presence of a BLOB or TEXT column in the table.
-> In-memory temporary tables are managed by the MEMORY storage engine, which uses fixed-length row format. VARCHAR and VARBINARY column values are padded to the maximum column length, in effect storing them as CHAR and BINARY columns.
-
-Load `temptables.sql`.
-
-Demonstration of the point, on MySQL 5.7:
-
-```sql
-EXPLAIN SELECT f1, GROUP_CONCAT(f2) FROM tt GROUP BY f1;
--- +----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-----------------+
--- | id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra           |
--- +----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-----------------+
--- |  1 | SIMPLE      | tt    | NULL       | ALL  | NULL          | NULL | NULL    | NULL |    4 |   100.00 | Using temporary |
--- +----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-----------------+
-
-SHOW GLOBAL STATUS LIKE '%tmp%tables';
--- +-------------------------+-------+
--- | Variable_name           | Value |
--- +-------------------------+-------+
--- | Created_tmp_disk_tables | 12    |
--- | Created_tmp_tables      | 16    |
--- +-------------------------+-------+
-
-SELECT f1, GROUP_CONCAT(f2) FROM tt GROUP BY f1;
--- ...
-
-SHOW GLOBAL STATUS LIKE '%tmp%tables';
--- +-------------------------+-------+
--- | Variable_name           | Value |
--- +-------------------------+-------+
--- | Created_tmp_disk_tables | 13    |
--- | Created_tmp_tables      | 18    |
--- +-------------------------+-------+
-```
-
-(note that SHOW GLOBAL STATUS uses a temporary table!)
-
-When trying the same on MySQL 8.0, the `Created_tmp_disk_tables` count is not increased!
 
 ## Schema migration tool issues
 
 There's a known [showstopper bug](https://github.com/github/gh-ost/issues/687) on the latest Gh-ost release, which prevents operations from succeeding on MySQL 8.
 
-Use `pt-online-schema-change` v3.0.x (but v3.1.0 is broken!) or Facebook's OnlineSchemaChange.
+Use trigger-based tools, like `pt-online-schema-change` v3.1.1 or v3.0.x (but v3.1.0 is broken!) or Facebook's OnlineSchemaChange
 
-## Questions time
+## Conclusion
 
-## Extra topics
+- Over the next weeks, I will expand this subject into a series of articles in my professional blog
+- This presentation is hosted at github.com/saveriomiroddi/prefosdem-2020-presentation
 
-### Turbocharge MySQL write capacity using an NVRAM device, or /dev/shm (tmpfs) in dev environments
 
-### Negative regex (for GROUP BY)
+## Extra: `innodb_flush_neighbors`
 
-Reference: https://stackoverflow.com/a/406408
-
-```sh
-grep -zP 'GROUP BY .+\n((?!ORDER BY ).)*\n' /tmp/test*
-```
-
-## Secondary/discarded topics
-
-### Debate about doublewrite (read sources)
-
-### Query caching is gone!
-
-In a nutshell, query caching can be expensive to maintain in highly concurrent contexts, and even more so, cause contention.
-
-References:
-
-- https://mysqlserverteam.com/mysql-8-0-retiring-support-for-the-query-cache
-- https://www.percona.com/blog/2015/01/02/the-mysql-query-cache-how-it-works-and-workload-impacts-both-good-and-bad
-- http://www.markleith.co.uk/2010/09/24/tracking-mutex-locks-in-a-process-list-mysql-55s-performance_schema
-
-- OPTIONAL/STUDY: how to analyze query caching savings in a running system with MySQL 5.7 (at a minimum, examine the query used for checking contention)
-
-### In-depth review of VARCHARs/BLOBs
-
-- OPTIONAL/STUDY (3 articles): general considerations about VARCHARs/BLOBs
-  - [Live view char values storage fragmentation](https://dba.stackexchange.com/a/210430)
-  - https://mysqlserverteam.com/externally-stored-fields-in-innodb
+> When the table data is stored on a traditional HDD storage device, flushing such neighbor pages in one operation reduces I/O overhead (primarily for disk seek operations) compared to flushing individual pages at different times

@@ -12,6 +12,7 @@ cat > /tmp/test1 << SQL
 SQL
 
 cat > /tmp/test2 << SQL
+
   GROUP BY col5
   ORDER BY col5
 SQL
