@@ -14,7 +14,7 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
     - [Comparisons utf8_general_ci column <> literals](#comparisons-utf8_general_ci-column--literals)
     - [Comparisons utf8_general_ci column <> columns](#comparisons-utf8_general_ci-column--columns)
   - [Issues with `0900_ai` collation padding](#issues-with-0900_ai-collation-padding)
-  - [Issues with triggers](#issues-with-triggers)
+  - [Triggers](#triggers)
   - [Behavior with indexes](#behavior-with-indexes)
   - [Consequences of the increase in (potential) size of char columns](#consequences-of-the-increase-in-potential-size-of-char-columns)
   - [Mac Homebrew default collation is `utf8mb4_general_ci`!](#mac-homebrew-default-collation-is-utf8mb4_general_ci)
@@ -34,38 +34,32 @@ The presentation shows the core problems to take care of - more advanced (eg. at
 
 ```sh
 cd ~/local
-ls -l
 
-tar xvf *5.7* && tar xvf *8.0*
+# Amusing but excessive :-)
+#
+# ls -1 *.tar.* | tee $(tty) | parallel tar xvf
+
+ls -l
+ls -1 *.tar.* | parallel tar xvf
 
 ln -sf ~/code/prefosdem-2020-presentation/files/my.cnf ~/.my.cnf
 
 cat ~/.my.cnf
-
-cat $(which mystop)
-cat $(which mystart)
-cat $(which mylast)
 ```
 
 ## First step: compare the global system variables
 
 The general idea is to get a nice, ordered layout for comparing.
 
-Run on MySQL 5.7.
-
-First show the base output, then enhance it, capture it and copy it to meld:
+Show that the output is not very readable:
 
 ```sql
 SHOW GLOBAL VARIABLES;
-
-SHOW GLOBAL VARIABLES WHERE Variable_name     RLIKE "optimizer_switch|sql_mode";
-SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch|sql_mode";
 ```
 
-Run on MySQL 8:
+The compare the below between 5.7 and 8.0:
 
 ```sql
-SHOW GLOBAL VARIABLES WHERE Variable_name     RLIKE "optimizer_switch|sql_mode";
 SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch|sql_mode";
 ```
 
@@ -82,14 +76,14 @@ Typical example - more correct accent insensitivity:
 
 ```sql
 -- Å = U+212B
-SELECT "Å" = "a" COLLATE utf8mb4_general_ci `result`;
+SELECT "sÅverio" = "saverio" COLLATE utf8mb4_general_ci;
 -- +--------+
 -- | result |
 -- +--------+
 -- |      0 |
 -- +--------+
 
-SELECT "Å" = "a" `result`; -- Default (COLLATE utf8mb4_0900_ai_ci);
+SELECT "sÅverio" = "saverio"; -- Default (COLLATE utf8mb4_0900_ai_ci);
 -- +--------+
 -- | result |
 -- +--------+
@@ -102,7 +96,7 @@ Explain history of the 0900 decision, and problems with web documentation.
 ### How the charset parameters work
 
 ```sql
-SHOW VARIABLES WHERE Variable_name RLIKE '^(character_set|collation)_' AND Variable_name NOT RLIKE 'system|database';
+SHOW VARIABLES WHERE Variable_name RLIKE '^(character_set|collation)_' AND Variable_name NOT RLIKE 'system|data|dir';
 -- +--------------------------+--------------------+
 -- | Variable_name            | Value              |
 -- +--------------------------+--------------------+
@@ -130,7 +124,7 @@ Reference: https://dev.mysql.com/doc/refman/8.0/en/charset-collation-coercibilit
 Comparison vs BMP utf8mb4:
 
 ```sql
-SELECT c3_gen = _utf8mb4'ä' `result` FROM tcolls;
+SELECT c3_gen = 'ä' `result` FROM tcolls;
 -- +--------+
 -- | result |
 -- +--------+
@@ -148,7 +142,7 @@ Coercion values:
 Comparison vs SMP (supplementary multilingual plane) character (emoji), with explicit collation:
 
 ```sql
-SELECT c3_gen = _utf8mb4'🍕' COLLATE utf8mb4_bin `result` FROM tcolls;
+SELECT c3_gen = '🍕' COLLATE utf8mb4_0900_ai_ci `result` FROM tcolls;
 -- +--------+
 -- | result |
 -- +--------+
@@ -228,13 +222,12 @@ SELECT '' = ' ';
 Ouch! Where does this behavior come from? Let's check the collation (**attention**: it's `SHOW COLLATION`, without `s`, and use the field name (`Collation`)).
 
 ```sql
-SHOW COLLATION WHERE Collation RLIKE 'utf8(mb4)?_(general|0900_ai)_ci';
+SHOW COLLATION WHERE Collation RLIKE 'utf8mb4_general_ci|utf8mb4_0900_ai_ci';
 -- +--------------------+---------+-----+---------+----------+---------+---------------+
 -- | Collation          | Charset | Id  | Default | Compiled | Sortlen | Pad_attribute |
 -- +--------------------+---------+-----+---------+----------+---------+---------------+
 -- | utf8mb4_0900_ai_ci | utf8mb4 | 255 | Yes     | Yes      |       0 | NO PAD        |
 -- | utf8mb4_general_ci | utf8mb4 |  45 |         | Yes      |       1 | PAD SPACE     |
--- | utf8_general_ci    | utf8    |  33 | Yes     | Yes      |       1 | PAD SPACE     |
 -- +--------------------+---------+-----+---------+----------+---------+---------------+
 ```
 
@@ -253,9 +246,9 @@ The following are the formal rules from the SQL (2003) standard (section 8.2):
 
 Conclusion: before migrating, data must be trimmed, and must be 100% sure that the app doesn't introduce new instances.
 
-### Issues with triggers
+### Triggers
 
-The trigger properties can be handled like the client charset/collation, however, it's crucial not to forget to change `COLLATION` modifiers inside the triggers.
+Triggers are fairly easy to handle (see next), as they can be dropped/rebuilt - just make sure to consider comparisons in the trigger body.
 
 Edited sample of a trigger:
 
@@ -411,6 +404,12 @@ Reference: https://dev.mysql.com/doc/refman/8.0/en/statistics-table.html
 Load `information_schema_stats_expiry.sql`.
 
 ```sql
+-- Necessary: loads the stats
+--
+SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'ainc';
+
+INSERT INTO ainc VALUES ();
+
 SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'ainc';
 -- +------------+----------------+
 -- | TABLE_NAME | AUTO_INCREMENT |
@@ -418,20 +417,11 @@ SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_nam
 -- | ainc       |           NULL |
 -- +------------+----------------+
 
-INSERT INTO ainc VALUES (1);
-
-SELECT TABLE_NAME, AUTO_INCREMENT FROM information_schema.tables WHERE table_name = 'ainc';
--- +------------+----------------+
--- | TABLE_NAME | AUTO_INCREMENT |
--- +------------+----------------+
--- | ainc       |           NULL |
--- +------------+----------------+
-
-SHOW CREATE TABLE ainc;
-CREATE TABLE `ainc` (
-  `id` int NOT NULL AUTO_INCREMENT,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci |
+SHOW CREATE TABLE ainc\G
+-- CREATE TABLE `ainc` (
+--   `id` int NOT NULL AUTO_INCREMENT,
+--   PRIMARY KEY (`id`)
+-- ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 ANALYZE TABLE ainc;
 
