@@ -7,7 +7,7 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
 - [Introduction: Who am I](#introduction-who-am-i)
 - [Introduction: Presentation and target audience](#introduction-presentation-and-target-audience)
 - [Preparing MySQL: setup and tooling](#preparing-mysql-setup-and-tooling)
-- [First step: compare the global system variables](#first-step-compare-the-global-system-variables)
+- [Summary of the points requiring attention](#summary-of-the-points-requiring-attention)
 - [Migrating to utf8mb4: Summary](#migrating-to-utf8mb4-summary)
   - [How the charset parameters work](#how-the-charset-parameters-work)
   - [Collation coercion, and issues `general` <> `0900_ai`](#collation-coercion-and-issues-general--0900_ai)
@@ -17,12 +17,12 @@ tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
   - [Triggers](#triggers)
   - [Behavior with indexes](#behavior-with-indexes)
   - [Consequences of the increase in (potential) size of char columns](#consequences-of-the-increase-in-potential-size-of-char-columns)
-  - [Mac Homebrew default collation is `utf8mb4_general_ci`!](#mac-homebrew-default-collation-is-utf8mb4_general_ci)
 - [`information_schema_stats_expiry` introduction](#information_schema_stats_expiry-introduction)
 - [GROUP BY is now unsorted (not implicitly sorted)](#group-by-is-now-unsorted-not-implicitly-sorted)
 - [Schema migration tool issues](#schema-migration-tool-issues)
 - [Conclusion](#conclusion)
-- [Extra: `innodb_flush_neighbors`](#extra-innodb_flush_neighbors)
+- [Extra: comparing the global system variables between major releases](#extra-comparing-the-global-system-variables-between-major-releases)
+- [Extra: Mac Homebrew default collation is `utf8mb4_general_ci`!](#extra-mac-homebrew-default-collation-is-utf8mb4_general_ci)
 
 ## Introduction: Who am I
 
@@ -39,7 +39,7 @@ cd ~/local
 #
 # ls -1 *.tar.* | tee $(tty) | parallel tar xvf
 
-ls -l
+ls -l *.tar.*
 ls -1 *.tar.* | parallel tar xvf
 
 ln -sf ~/code/prefosdem-2020-presentation/files/my.cnf ~/.my.cnf
@@ -47,21 +47,9 @@ ln -sf ~/code/prefosdem-2020-presentation/files/my.cnf ~/.my.cnf
 cat ~/.my.cnf
 ```
 
-## First step: compare the global system variables
+## Summary of the points requiring attention
 
-The general idea is to get a nice, ordered layout for comparing.
-
-Show that the output is not very readable:
-
-```sql
-SHOW GLOBAL VARIABLES;
-```
-
-The compare the below between 5.7 and 8.0:
-
-```sql
-SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch|sql_mode";
-```
+[...]
 
 ## Migrating to utf8mb4: Summary
 
@@ -330,73 +318,6 @@ Remember:
 - `[VAR]CHAR(n)` refers to the number of characters; therefore, the maximum requirement is `4 * n` bytes
 - `TEXT` fields refer to the number of bytes
 
-### Mac Homebrew default collation is `utf8mb4_general_ci`!
-
-When MySQL is installed via Homebrew, the default collation is `utf8mb4_general_ci`.
-
-**attention: don't forget to pass the filename**
-
-```sh
-cd ~/code/homebrew-core-dev/Formula
-
-# Print relevant section:
-#
-perl -ne 'print if /args = / .. /\]/' mysql.rb
-#    args = %W[
-#      -DFORCE_INSOURCE_BUILD=1
-#      -DCOMPILATION_COMMENT=Homebrew
-#      -DDEFAULT_CHARSET=utf8mb4
-#      -DDEFAULT_COLLATION=utf8mb4_general_ci
-#      -DINSTALL_DOCDIR=share/doc/#{name}
-#      -DINSTALL_INCLUDEDIR=include/mysql
-#      -DINSTALL_INFODIR=share/info
-#      -DINSTALL_MANDIR=share/man
-#      -DINSTALL_MYSQLSHAREDIR=share/mysql
-#      -DINSTALL_PLUGINDIR=lib/plugin
-#      -DMYSQL_DATADIR=#{datadir}
-#      -DSYSCONFDIR=#{etc}
-#      -DWITH_BOOST=boost
-#      -DWITH_EDITLINE=system
-#      -DWITH_SSL=yes
-#      -DWITH_PROTOBUF=system
-#      -DWITH_UNIT_TESTS=OFF
-#      -DENABLED_LOCAL_INFILE=1
-#      -DWITH_INNODB_MEMCACHED=ON
-#    ]
-
-# Fix it!
-#
-perl -i -ne 'print unless /CHARSET|COLLATION/' mysql.rb
-
-git diff
-```
-
-This will cause problems when connecting to an 8.0 server with standard defaults.
-
-I've opened an issue and provided a PR to the project.
-
-There are two approaches.
-
-1. Update the formula and rebuild MySQL:
-
-```sh
-formula_filename=$(brew formula mysql)
-
-perl -i.bak -ne "print unless /CHARSET|COLLATION/" "$formula_filename"
-
-brew reinstall --build-from-source mysql
-```
-
-2. Ignore the client encoding on handshake
-
-Setting `character-set-client-handshake = OFF` in the MySQL configuration will impose on the clients the the default server character set.
-
-```sh
-# Show setting:
-#
-mysqld --verbose --help | grep handshake
-```
-
 ## `information_schema_stats_expiry` introduction
 
 Reference: https://dev.mysql.com/doc/refman/8.0/en/statistics-table.html
@@ -483,7 +404,85 @@ Use trigger-based tools, like `pt-online-schema-change` v3.1.1 or v3.0.x (but v3
 - Over the next weeks, I will expand this subject into a series of articles in my professional blog
 - This presentation is hosted at github.com/saveriomiroddi/prefosdem-2020-presentation
 
+## Extra: comparing the global system variables between major releases
 
-## Extra: `innodb_flush_neighbors`
+The general idea is to get a nice, ordered layout for comparing.
 
-> When the table data is stored on a traditional HDD storage device, flushing such neighbor pages in one operation reduces I/O overhead (primarily for disk seek operations) compared to flushing individual pages at different times
+Show that the output is not very readable:
+
+```sql
+SHOW GLOBAL VARIABLES;
+```
+
+The compare the below between 5.7 and 8.0:
+
+```sql
+SHOW GLOBAL VARIABLES WHERE Variable_name NOT RLIKE "optimizer_switch|sql_mode";
+```
+
+## Extra: Mac Homebrew default collation is `utf8mb4_general_ci`!
+
+When MySQL is installed via Homebrew, the default collation is `utf8mb4_general_ci`.
+
+**attention: don't forget to pass the filename**
+
+```sh
+cd ~/code/homebrew-core-dev/Formula
+
+# Print relevant section:
+#
+perl -ne 'print if /args = / .. /\]/' mysql.rb
+#    args = %W[
+#      -DFORCE_INSOURCE_BUILD=1
+#      -DCOMPILATION_COMMENT=Homebrew
+#      -DDEFAULT_CHARSET=utf8mb4
+#      -DDEFAULT_COLLATION=utf8mb4_general_ci
+#      -DINSTALL_DOCDIR=share/doc/#{name}
+#      -DINSTALL_INCLUDEDIR=include/mysql
+#      -DINSTALL_INFODIR=share/info
+#      -DINSTALL_MANDIR=share/man
+#      -DINSTALL_MYSQLSHAREDIR=share/mysql
+#      -DINSTALL_PLUGINDIR=lib/plugin
+#      -DMYSQL_DATADIR=#{datadir}
+#      -DSYSCONFDIR=#{etc}
+#      -DWITH_BOOST=boost
+#      -DWITH_EDITLINE=system
+#      -DWITH_SSL=yes
+#      -DWITH_PROTOBUF=system
+#      -DWITH_UNIT_TESTS=OFF
+#      -DENABLED_LOCAL_INFILE=1
+#      -DWITH_INNODB_MEMCACHED=ON
+#    ]
+
+# Fix it!
+#
+perl -i -ne 'print unless /CHARSET|COLLATION/' mysql.rb
+
+git diff
+```
+
+This will cause problems when connecting to an 8.0 server with standard defaults.
+
+My fix PR has been merged into master.
+
+There are two approaches.
+
+1. Update the formula and rebuild MySQL:
+
+```sh
+formula_filename=$(brew formula mysql)
+
+perl -i.bak -ne "print unless /CHARSET|COLLATION/" "$formula_filename"
+
+brew reinstall --build-from-source mysql
+```
+
+2. Ignore the client encoding on handshake
+
+Setting `character-set-client-handshake = OFF` in the MySQL configuration will impose on the clients the the default server character set.
+
+```sh
+# Show setting:
+#
+mysqld --verbose --help | grep handshake
+```
