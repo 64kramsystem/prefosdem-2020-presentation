@@ -1,0 +1,3 @@
+#!/bin/sh
+
+echo -n 'utf8mb4_0900_ai_ci' | xsel -ib

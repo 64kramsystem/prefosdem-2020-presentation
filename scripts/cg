@@ -1,0 +1,3 @@
+#!/bin/sh
+
+echo -n 'utf8mb4_general_ci' | xsel -ib
