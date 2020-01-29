@@ -1,7 +1,3 @@
-# PreFOSDEM 2020 Presentation
+My MySQL preFOSDEM 2020 presentation.
 
-Base of my MySQL preFOSDEM 2020 presentation.
-
-Will be published shortly (before or after) the PreFOSDEM.
-
-After, the subjects will be expanded and added as self-standing blogs posts to my [professional blog](https://saveriomiroddi.github.io).
+After the preFOSDEM, the subjects will be expanded and added as self-standing blogs posts to my [professional blog](https://saveriomiroddi.github.io).
