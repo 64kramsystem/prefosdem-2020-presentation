@@ -1,9 +1,3 @@
----
-layout: post
-title: WIP FOSDEM MySQL 8 Upgrade
-tags: [databases,innodb,linux,mysql,shell_scripting,sysadmin]
----
-
 - [Introduction: Who am I](#introduction-who-am-i)
 - [Introduction: Presentation and target audience](#introduction-presentation-and-target-audience)
 - [Preparing MySQL: setup and tooling](#preparing-mysql-setup-and-tooling)
